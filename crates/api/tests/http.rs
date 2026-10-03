@@ -1238,7 +1238,7 @@ async fn admins_can_have_a_clip_analysed_again(pool: PgPool) {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(queued().await.is_empty());
 
-    // Queued once at normal priority, however often it's asked for.
+    // Queued once at low priority (uploads go first), however often it's asked for.
     for _ in 0..2 {
         let (status, body) = send(&app, "POST", &path, Some(&admin), None, &[]).await;
         assert_eq!(status, StatusCode::ACCEPTED, "{body}");
@@ -1246,7 +1246,7 @@ async fn admins_can_have_a_clip_analysed_again(pool: PgPool) {
     }
     assert_eq!(
         queued().await,
-        [(json!({ "clipId": id }), jobs::PRIORITY_NORMAL)]
+        [(json!({ "clipId": id }), jobs::PRIORITY_LOW)]
     );
 
     // Pending until it has run, even though there's an older result.

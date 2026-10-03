@@ -22,8 +22,8 @@ const JANITOR_EVERY: Duration = Duration::from_secs(3600);
 
 /// Serves `/healthz`, waits for the schema, then runs jobs until `shutdown` resolves.
 /// `shutdown` is first polled once connected to Postgres (the binary's signal handlers
-/// are installed then), and only checked between jobs: a job in progress runs to
-/// completion (or is requeued by the reaper if the platform kills us first).
+/// are installed then). A job in progress gets `SHUTDOWN_GRACE_SECS` to finish; one that
+/// doesn't is handed back to the queue for the next worker.
 pub async fn run(
     config: Config,
     shutdown: impl Future<Output = ()> + Send + 'static,
@@ -43,7 +43,7 @@ pub async fn run(
         let cancel = token.clone();
         tokio::spawn(async move {
             shutdown.await;
-            tracing::info!("shutdown requested; finishing current job");
+            tracing::info!("shutdown requested; giving the current job its grace period");
             cancel.cancel();
         });
         token
@@ -84,6 +84,8 @@ pub async fn run(
         // A tenth of what the reaper waits, so a few missed beats never look like a dead
         // worker.
         heartbeat: Duration::from_secs((config.stale_job_secs / 10).max(1)),
+        shutdown: shutdown.clone(),
+        shutdown_grace: Duration::from_secs(config.shutdown_grace_secs),
     });
     tokio::spawn(reap_stale_jobs(
         worker.clone(),
@@ -296,6 +298,7 @@ mod tests {
             bind_addr: free_port(),
             poll_interval_ms: 20,
             stale_job_secs: 1800,
+            shutdown_grace_secs: 90,
             storage_account: "devstoreaccount1".into(),
             storage_blob_endpoint: Some("http://127.0.0.1:10000/devstoreaccount1".into()),
             storage_account_key: Some(AZURITE_KEY.into()),
@@ -582,6 +585,8 @@ mod tests {
             analyse: None,
             id: "test-worker".into(),
             heartbeat: Duration::from_secs(60),
+            shutdown: CancellationToken::new(),
+            shutdown_grace: Duration::from_secs(90),
         })
     }
 

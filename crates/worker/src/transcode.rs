@@ -129,11 +129,13 @@ pub async fn run(worker: &Worker, payload: &Value) -> Result<(), JobError> {
         .map_err(anyhow::Error::from)?;
     // The killfeed is only the uploader's own when they recorded it from their point of view.
     if worker.analyse.is_some() && clip.game_id == "cs2" && clip.my_pov {
-        // The clip is ready either way; a lost analysis can be queued again later.
-        if let Err(e) = jobs::enqueue(
+        // The clip is ready either way; a lost analysis can be queued again later. Low
+        // priority: the clip already plays, and the next upload's transcode goes first.
+        if let Err(e) = jobs::enqueue_with_priority(
             &worker.pool,
             clips::ANALYSE_JOB,
             json!({ "clipId": clip_id }),
+            jobs::PRIORITY_LOW,
         )
         .await
         {

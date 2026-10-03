@@ -36,6 +36,8 @@ fn worker(pool: PgPool) -> Worker {
         id: "test-worker".into(),
         // Often, so even a short job's lock is refreshed.
         heartbeat: Duration::from_millis(50),
+        shutdown: CancellationToken::new(),
+        shutdown_grace: Duration::from_secs(90),
     }
 }
 
@@ -1565,8 +1567,13 @@ fn analyse_gives_up_at_its_time_limit() {
     let error = result.unwrap_err().to_string();
     assert!(error.contains("took too long"), "{error}");
     assert!(took < Duration::from_secs(3), "{took:?}");
-    // Scaled to the clip: a 5-minute clip gets longer than a short one.
+    // Scaled to the clip: a 5-minute clip gets longer than a short one, and the 180 s clip
+    // that took 634 s in production fits with room to spare.
     assert!(analyse::time_limit(Duration::from_secs(300)) > analyse::time_limit(Duration::ZERO));
+    assert_eq!(
+        analyse::time_limit(Duration::from_secs(180)),
+        Duration::from_secs(1200)
+    );
 }
 
 /// The killfeed reader reads the original with the transcode's allowlists: a file in
@@ -1914,6 +1921,13 @@ async fn queues_killfeed_analysis_for_the_uploaders_own_view(pool: PgPool) {
     let queued = jobs_for(&pool, clips::ANALYSE_JOB, mine.id).await;
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].0, "queued");
+    // Behind the next upload's transcode.
+    let priority: i16 = sqlx::query_scalar("SELECT priority FROM jobs WHERE kind = $1")
+        .bind(clips::ANALYSE_JOB)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(priority, jobs::PRIORITY_LOW);
     sqlx::query("DELETE FROM jobs WHERE kind = $1")
         .bind(clips::ANALYSE_JOB)
         .execute(&pool)
@@ -2507,4 +2521,52 @@ fn cleans_up_after_jobs_cut_short() {
     let mut want = vec!["keep-me".to_owned(), file];
     want.sort();
     assert_eq!(kept, want);
+}
+
+/// A deploy or restart stops the worker mid-job: the job gets its grace period, then goes
+/// back to the queue with its attempt given back, ready for the next worker at once.
+#[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
+async fn stopping_mid_job_hands_it_back_after_the_grace_period(pool: PgPool) {
+    let mut worker = worker(pool.clone());
+    worker.shutdown_grace = Duration::from_millis(200);
+    let shutdown = worker.shutdown.clone();
+    let id = jobs::enqueue(&pool, "hang", json!({})).await.unwrap();
+    let running = tokio::spawn(async move { worker.run_once().await });
+    let row = || async {
+        sqlx::query_as::<_, (String, i32)>("SELECT status, attempts FROM jobs WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+    while row().await.0 != "running" {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let asked = std::time::Instant::now();
+    shutdown.cancel();
+    let found = tokio::time::timeout(Duration::from_secs(5), running)
+        .await
+        .expect("the worker stops after the grace period")
+        .unwrap()
+        .unwrap();
+    assert!(found);
+    assert!(
+        asked.elapsed() >= Duration::from_millis(200),
+        "waited for the grace period"
+    );
+    assert_eq!(row().await, ("queued".into(), 0));
+    let next = jobs::claim(&pool, "next-worker").await.unwrap().unwrap();
+    assert_eq!((next.id, next.attempts), (id, 1));
+}
+
+/// A job that finishes within the grace period completes as usual.
+#[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
+async fn a_job_that_finishes_within_the_grace_period_completes(pool: PgPool) {
+    let mut worker = worker(pool.clone());
+    worker.shutdown_grace = Duration::from_secs(5);
+    worker.shutdown.cancel();
+    let id = jobs::enqueue(&pool, "noop", json!({})).await.unwrap();
+    assert!(worker.run_once().await.unwrap());
+    assert_eq!(job_row(&pool, id).await.0, "succeeded");
 }

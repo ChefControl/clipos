@@ -31,6 +31,13 @@ pub struct Config {
     #[arg(long, env = "STALE_JOB_SECS", default_value_t = 1800)]
     pub stale_job_secs: u64,
 
+    /// Once asked to stop, how long the running job may still take before it's handed back
+    /// to the queue. Keep it under the platform's kill timeout (App Service's
+    /// WEBSITES_CONTAINER_STOP_TIME_LIMIT, 120 s at most, set in infra/azure/app.tf), so the
+    /// handback happens before the kill.
+    #[arg(long, env = "SHUTDOWN_GRACE_SECS", default_value_t = 90)]
+    pub shutdown_grace_secs: u64,
+
     /// Storage account name (`devstoreaccount1` for Azurite).
     #[arg(long, env = "STORAGE_ACCOUNT")]
     pub storage_account: String,

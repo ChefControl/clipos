@@ -13,8 +13,12 @@ pub const MAX_ATTEMPTS: i32 = 3;
 /// Job priorities (`jobs.priority`): `claim` takes the highest first, so lower means less
 /// urgent. Someone is waiting on these (an upload's transcode); the column's default.
 pub const PRIORITY_NORMAL: i16 = 0;
+/// Someone wants the result, but nothing is blocked on it: a clip's killfeed analysis,
+/// which runs after its clip is already playable and takes minutes. These run after every
+/// normal job, so a bulk upload's transcodes all finish before its analyses start.
+pub const PRIORITY_LOW: i16 = -5;
 /// Nobody is waiting on these (backfills over the whole library): they only run when no
-/// normal job is ready, so new uploads never queue behind them.
+/// other job is ready, so new uploads never queue behind them.
 pub const PRIORITY_BACKGROUND: i16 = -10;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -99,6 +103,25 @@ pub async fn complete(pool: &PgPool, job: &Job, worker_id: &str) -> sqlx::Result
     Ok(sqlx::query(
         "UPDATE jobs SET status = 'succeeded', locked_at = NULL, locked_by = NULL,
                 last_error = NULL, updated_at = now()
+          WHERE id = $1 AND status = 'running' AND locked_by = $2 AND attempts = $3",
+    )
+    .bind(job.id)
+    .bind(worker_id)
+    .bind(job.attempts)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
+/// Hands a running job back to the queue, as if it had never been claimed: the worker is
+/// shutting down and couldn't finish it, which isn't the job's fault, so the attempt isn't
+/// counted and the next worker can start it at once. Like `complete`, only the run that
+/// holds the job can. Returns false when the job wasn't this run's any more.
+pub async fn release(pool: &PgPool, job: &Job, worker_id: &str) -> sqlx::Result<bool> {
+    Ok(sqlx::query(
+        "UPDATE jobs SET status = 'queued', attempts = attempts - 1, run_after = now(),
+                locked_at = NULL, locked_by = NULL, updated_at = now()
           WHERE id = $1 AND status = 'running' AND locked_by = $2 AND attempts = $3",
     )
     .bind(job.id)
@@ -233,6 +256,26 @@ mod tests {
     }
 
     #[sqlx::test(migrator = "crate::db::MIGRATOR")]
+    async fn a_released_job_runs_again_at_once_without_losing_an_attempt(pool: PgPool) {
+        let id = enqueue(&pool, "noop", json!({})).await.unwrap();
+        let job = claim(&pool, "w1").await.unwrap().unwrap();
+        assert!(!release(&pool, &job, "w2").await.unwrap(), "not w2's run");
+        assert!(release(&pool, &job, "w1").await.unwrap());
+        assert_eq!(status(&pool, id).await, ("queued".into(), 0, None));
+        assert!(
+            !release(&pool, &job, "w1").await.unwrap(),
+            "already released"
+        );
+
+        // No backoff: the next worker takes it straight away, as its first attempt.
+        let again = claim(&pool, "w2")
+            .await
+            .unwrap()
+            .expect("claimable at once");
+        assert_eq!((again.id, again.attempts), (id, 1));
+    }
+
+    #[sqlx::test(migrator = "crate::db::MIGRATOR")]
     async fn failures_back_off_then_give_up(pool: PgPool) {
         let id = enqueue(&pool, "noop", json!({})).await.unwrap();
 
@@ -332,6 +375,54 @@ mod tests {
                 .fetch_one(&pool)
         };
         assert_eq!(priority(keyframes).await.unwrap(), PRIORITY_BACKGROUND);
+        assert_eq!(priority(transcode).await.unwrap(), PRIORITY_NORMAL);
+    }
+
+    /// A bulk upload: every transcode runs before any of the analyses queued as they
+    /// finish, and the analyses still run before a backfill.
+    #[sqlx::test(migrator = "crate::db::MIGRATOR")]
+    async fn analyses_wait_for_transcodes_but_not_for_backfills(pool: PgPool) {
+        enqueue_with_priority(&pool, "keyframes", json!({}), PRIORITY_BACKGROUND)
+            .await
+            .unwrap();
+        enqueue_with_priority(&pool, "analyse", json!({}), PRIORITY_LOW)
+            .await
+            .unwrap();
+        enqueue(&pool, "transcode", json!({})).await.unwrap();
+        let mut order = Vec::new();
+        while let Some(job) = claim(&pool, "w1").await.unwrap() {
+            order.push(job.kind);
+        }
+        assert_eq!(order, ["transcode", "analyse", "keyframes"]);
+    }
+
+    /// Migration 0015 lowers the analyses already queued at the old priority, and running
+    /// it again changes nothing.
+    #[sqlx::test(migrator = "crate::db::MIGRATOR")]
+    async fn migration_lowers_queued_analyses(pool: PgPool) {
+        let analyse = enqueue(&pool, "analyse", json!({})).await.unwrap();
+        let done = enqueue(&pool, "analyse", json!({})).await.unwrap();
+        sqlx::query("UPDATE jobs SET status = 'succeeded' WHERE id = $1")
+            .bind(done)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let transcode = enqueue(&pool, "transcode", json!({})).await.unwrap();
+        for _ in 0..2 {
+            sqlx::raw_sql(include_str!(
+                "../../../migrations/0015_analyse_priority.sql"
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let priority = |id| {
+            sqlx::query_scalar::<_, i16>("SELECT priority FROM jobs WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+        };
+        assert_eq!(priority(analyse).await.unwrap(), PRIORITY_LOW);
+        assert_eq!(priority(done).await.unwrap(), PRIORITY_NORMAL);
         assert_eq!(priority(transcode).await.unwrap(), PRIORITY_NORMAL);
     }
 
