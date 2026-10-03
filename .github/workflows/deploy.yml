@@ -176,6 +176,9 @@ jobs:
             bin=out/api
             spa=web/dist
           push: true
+          # Minimal provenance: max mode records GitHub's whole push payload (commit
+          # authors included) and prints it in the public build log.
+          provenance: mode=min
           tags: ${{ steps.acr.outputs.server }}/clipos-api:${{ github.sha }}
           build-args: CLIPOS_VERSION=${{ github.sha }}
           cache-from: type=gha,scope=api-runtime
@@ -190,6 +193,9 @@ jobs:
           file: deploy/worker.Dockerfile
           build-contexts: bin=out/worker
           push: true
+          # Minimal provenance: max mode records GitHub's whole push payload (commit
+          # authors included) and prints it in the public build log.
+          provenance: mode=min
           tags: ${{ steps.acr.outputs.server }}/clipos-worker:${{ github.sha }}
           build-args: CLIPOS_VERSION=${{ github.sha }}
           cache-from: type=gha,scope=worker-runtime

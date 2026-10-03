@@ -22,7 +22,7 @@ variable "github_owner_id" {
 variable "github_repository_id" {
   description = "Numeric ID of the repository."
   type        = number
-  default     = 1398714690
+  default     = 1403585151
 }
 
 variable "github_branch" {

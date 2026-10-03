@@ -34,7 +34,9 @@ RUN mkdir -p /opt/onnxruntime \
 # codecs it lists, opens only the file or its SAS URL, writes no subtitle or data streams
 # and stops at the 5-minute cap and a time limit.
 FROM debian:trixie-slim
+# Upgrade too: the base image lags trixie-security (Trivy, audit.yml).
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home clipos
