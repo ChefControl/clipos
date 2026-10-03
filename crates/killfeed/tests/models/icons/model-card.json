@@ -1,0 +1,19 @@
+{
+  "name": "icons",
+  "version": "test",
+  "classes": [
+    "ak47",
+    "awp",
+    "headshot",
+    "wallbang",
+    "flash_assist"
+  ],
+  "files": {
+    "model.onnx": {
+      "sha256": "83a8c0e7c2a5d60af900c4b744fa2e9f569a2ab1c1cd9f2b9d1eb8738ec41ea6"
+    },
+    "classes.json": {
+      "sha256": "d671f45c26626c29a34e853429b4cb46f0f415a5bd43b4bd9180444b36760e92"
+    }
+  }
+}

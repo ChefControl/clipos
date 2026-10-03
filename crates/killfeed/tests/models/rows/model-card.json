@@ -1,0 +1,15 @@
+{
+  "name": "rows",
+  "version": "test",
+  "classes": [
+    "row"
+  ],
+  "files": {
+    "model.onnx": {
+      "sha256": "f0696c7e3e4f7044269c3006a028b42fbbc310616849f6074a5c9c03d1db8ea4"
+    },
+    "classes.json": {
+      "sha256": "513c283be79c0d71ac5bdb524ae96e9719cbde5c60a43c53efd8ac881a4a1ecf"
+    }
+  }
+}

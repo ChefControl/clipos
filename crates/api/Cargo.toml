@@ -1,0 +1,40 @@
+[package]
+name = "clipos-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+default-run = "clipos-api"
+
+[dependencies]
+clipos-core.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+axum.workspace = true
+clap.workspace = true
+dotenvy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
+uuid.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+
+[dev-dependencies]
+clipos-core = { workspace = true, features = ["test-util"] }
+chrono.workspace = true
+http-body-util = "0.1.5"
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite = "0.29"
+
+[lints]
+workspace = true

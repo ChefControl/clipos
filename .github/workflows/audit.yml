@@ -1,0 +1,81 @@
+name: Audit
+
+# New advisories are published whether or not our code changes, but CI only runs cargo
+# deny and pnpm audit when Rust or web files change. This runs both every Monday, and by
+# hand, the same way CI does, plus a scan of the images' Debian packages, which CI doesn't
+# check at all.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  rust-advisories:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+
+  web-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # Reads the lockfile; nothing needs installing.
+      - run: pnpm audit --audit-level high
+
+  # The Debian packages (ffmpeg among them) in the runtime stages of both Dockerfiles,
+  # built here with stand-in binaries, since the Rust and web dependencies are the jobs
+  # above. Fails on a HIGH or CRITICAL vulnerability that has a fix. Built from the
+  # public base images, so no registry login and nothing pushed.
+  image-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      # Trivy's own image, pinned by digest, rather than an action or a downloaded binary.
+      TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the runtime images with stand-in binaries
+        run: |
+          mkdir -p /tmp/stub/api /tmp/stub/worker /tmp/stub/spa /tmp/scan
+          touch /tmp/stub/api/clipos-api /tmp/stub/worker/clipos-worker
+          docker build -t clipos-api:scan -f deploy/api.Dockerfile \
+            --build-context bin=/tmp/stub/api --build-context spa=/tmp/stub/spa .
+          docker build -t clipos-worker:scan -f deploy/worker.Dockerfile \
+            --build-context bin=/tmp/stub/worker .
+          docker save -o /tmp/scan/clipos-api.tar clipos-api:scan
+          docker save -o /tmp/scan/clipos-worker.tar clipos-worker:scan
+      # Trivy reads the saved images, so it needs no access to Docker itself.
+      - name: Scan them
+        run: |
+          status=0
+          for image in clipos-api clipos-worker; do
+            docker run --rm -v /tmp/scan:/scan:ro -v /tmp/trivy:/root/.cache/trivy "$TRIVY_IMAGE" \
+              image --input "/scan/${image}.tar" --scanners vuln --severity HIGH,CRITICAL \
+              --ignore-unfixed --exit-code 1 --no-progress || status=1
+          done
+          exit "$status"

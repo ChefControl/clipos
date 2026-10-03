@@ -1,0 +1,4376 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "clipos API",
+    "description": "Invite-only clip archive.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/admin/clips/{id}/analyse": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Read a clip's killfeed again, e.g. after a fix to the analysis. The new result replaces\nthe old one when the worker is done; until then the analysis is pending.",
+        "operationId": "analyse_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Analysis queued, or already queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisQueued"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The clip isn't published, or has no killfeed to read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/admin/invites": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Every invite, active first, newest first.",
+        "operationId": "list_invites",
+        "responses": {
+          "200": {
+            "description": "Invites",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Invite"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Invite an email (or re-activate a revoked invite).",
+        "operationId": "create_invite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Invite created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invite"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/admin/invites/revoke": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Revoke an invite. The user and their clips stay, but they can no longer sign in.",
+        "operationId": "revoke_invite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeInvite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Invite revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invite"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Revoking your own invite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No active invite for that email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/admin/users": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Every user who has signed in.",
+        "operationId": "list_users",
+        "responses": {
+          "200": {
+            "description": "Users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/User"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/admin/users/{id}": {
+      "patch": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Change a user's role or status.",
+        "operationId": "update_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "User id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserAccess"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Changing your own access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips": {
+      "get": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Clips, newest or most-reacted first, with optional filters. Everyone's ready clips plus\nyour own that are processing or failed.",
+        "operationId": "list_clips",
+        "parameters": [
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`new` (default) or `top` (most reactions).",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "new",
+                "top"
+              ]
+            }
+          },
+          {
+            "name": "game",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "map",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "uploader",
+            "in": "query",
+            "description": "Uploader's handle.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "A tag, or several separated by commas: clips with any of them (`4k,ace`). Tags\nwith nothing usable in them (`!!!`) match no clip.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "player",
+            "in": "query",
+            "description": "Handle of a friend playing in the clip.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search the title, description, map and uploader.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reaction",
+            "in": "query",
+            "description": "Clips someone reacted to with this emoji (one of the six reactions).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`nextCursor` from the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of clips",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Start an upload.",
+        "operationId": "create_clip",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateClip"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Clip created; upload to `uploadUrl`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedClip"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid title, file type or size",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}": {
+      "get": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "One clip, with playback links once it's ready.",
+        "operationId": "get_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Move a clip to the trash; it can be restored for 7 days. Its share link is revoked.",
+        "operationId": "delete_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "In the trash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Edit a clip (uploader or admin). All of it is saved, or nothing is. Not while it's in\nthe trash.",
+        "operationId": "update_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateClip"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such clip, or it's in the trash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}/analysis": {
+      "get": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "What killfeed analysis read from a clip. 404 when it was never analysed (not CS2, or\nnot recorded from the uploader's point of view). Pending while an analysis is queued or\nrunning, also when it will replace an earlier one (an admin's re-analyse).",
+        "operationId": "get_analysis",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analysis, or that it's pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipAnalysis"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such clip, or no analysis",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}/complete": {
+      "post": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Finish an upload: checks the blob is complete, keeps its ETag and queues the\ntranscode. Safe to call again (e.g. after a network error).",
+        "operationId": "complete_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Processing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Upload missing or incomplete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not your clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}/download": {
+      "get": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Link to download the original upload.",
+        "operationId": "download_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Download link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such clip, or not uploaded yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}/hold": {
+      "post": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "\"Save it for the show\" after uploading (the upload starts before the switch is set).\nThe hold ends a week after the upload however often it's set (decision 29).",
+        "operationId": "hold_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved for the show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not your clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Uploaded over a week ago, or already played in a show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}/reactions/{emoji}": {
+      "put": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "React to a clip. Allowed emojis: 🔥 😂 💀 🐐 😮 👏.",
+        "operationId": "add_reaction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "emoji",
+            "in": "path",
+            "description": "Emoji (URL-encoded)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The clip's reactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReactionCount"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unsupported emoji or unpublished clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Remove your reaction.",
+        "operationId": "remove_reaction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "emoji",
+            "in": "path",
+            "description": "Emoji (URL-encoded)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The clip's reactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReactionCount"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}/release": {
+      "post": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "\"Post now\": a clip saved for the show becomes visible to everyone.",
+        "operationId": "release_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Visible to everyone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not your clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}/restore": {
+      "post": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Bring a clip back from the trash.",
+        "operationId": "restore_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not in the trash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "In the trash for over 7 days: being deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}/retry": {
+      "post": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Retry processing a failed clip.",
+        "operationId": "retry_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Processing again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The clip hasn't failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not your clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/{id}/share": {
+      "post": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Turn on the clip's public link (or get the existing one).",
+        "operationId": "share_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Clip with its `shareUrl`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not ready yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Revoke the clip's public link; anything already pasted stops working. Also for a clip\nin the trash.",
+        "operationId": "unshare_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Clip without a link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not yours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/config": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "operationId": "config",
+        "responses": {
+          "200": {
+            "description": "Public client configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicConfig"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "The signed-in user, created on first call.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "Current user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not invited, account disabled, or token lacks email",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Edit your own profile.",
+        "operationId": "update_me",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Handle taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/me/trash": {
+      "get": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Your clips in the trash (restorable for 7 days after deletion).",
+        "operationId": "trash",
+        "responses": {
+          "200": {
+            "description": "Deleted clips, most recent first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClipView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows": {
+      "get": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "Shows that ended, newest first: the archive's past shows.",
+        "operationId": "list_shows",
+        "responses": {
+          "200": {
+            "description": "Past shows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PastShow"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "Opens a show with tonight's clips; you host it. One show at a time (409 otherwise).",
+        "operationId": "create_show",
+        "responses": {
+          "201": {
+            "description": "The new show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A show is already on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/tonight": {
+      "get": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "Tonight: the show that's on, or the clips the next one would have.",
+        "operationId": "tonight",
+        "responses": {
+          "200": {
+            "description": "Tonight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tonight"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}": {
+      "get": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "One show, past or present, with everything for its page and replay.",
+        "operationId": "get_show",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/clips": {
+      "post": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "Anyone in the show adds a clip to the end of the queue.",
+        "operationId": "add_clip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddClip"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Your clip isn't ready to play",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not in the show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show or clip, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already in the lineup, or not in the lobby or live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/clips/{clip_id}/played": {
+      "post": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "The host: this clip started playing for everyone.",
+        "operationId": "mark_played",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "clip_id",
+            "in": "path",
+            "description": "Clip id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not in the lineup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The show isn't live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/end": {
+      "post": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "The host ends the show: winners are stored. A tied category needs the host's pick\n(409 with the tied clips of every tied category in `tied`). The body is optional.",
+        "operationId": "end_show",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/EndShow"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ended show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unreadable body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A vote is tied (`tied` names the clips), or not in the finale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/finale": {
+      "post": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "The host goes to the finale: after the last clip, or to end the show early.",
+        "operationId": "finale",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The show isn't live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/join": {
+      "post": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "Join the show (until it ends).",
+        "operationId": "join_show",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The show is over",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/lineup": {
+      "put": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "The host reorders and drops the clips still to play.",
+        "operationId": "set_lineup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetLineup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A clip that isn't waiting in the lineup, or one twice",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not in the lobby or live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/reactions": {
+      "post": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "A tap in the reaction dock while a clip plays.",
+        "operationId": "react",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewShowReaction"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Kept"
+          },
+          "400": {
+            "description": "Unknown emoji, a clip that hasn't played or is in the trash, or a moment outside the clip",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not in the show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The show isn't live",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/ready": {
+      "put": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "\"I'm ready, sound on\" (or not).",
+        "operationId": "set_ready",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetReady"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unreadable body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not in the show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The show is over",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/start": {
+      "post": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "The host starts the show.",
+        "operationId": "start_show",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not in the lobby",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/shows/{id}/votes/{category}": {
+      "put": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "Your vote in the finale for clip (`clip`) or fail (`fail`) of the night.",
+        "operationId": "vote",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Show id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "category",
+            "in": "path",
+            "description": "`clip` or `fail`",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "clip",
+                "fail"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CastVote"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShowView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a clip you can vote for",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not in the show",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such show, or shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not in the finale",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/tags": {
+      "get": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Tag autocomplete, most used first.",
+        "operationId": "search_tags",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Prefix to complete.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching tags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Every active member, by name.",
+        "operationId": "list_members",
+        "responses": {
+          "200": {
+            "description": "Members",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Member"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/users/{handle}": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "A member's profile. Their clips: `GET /api/clips?uploader={handle}`.",
+        "operationId": "get_profile",
+        "parameters": [
+          {
+            "name": "handle",
+            "in": "path",
+            "description": "Handle",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Profile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such member",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AddClip": {
+        "type": "object",
+        "required": [
+          "clipId"
+        ],
+        "properties": {
+          "clipId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AnalysisQueued": {
+        "type": "object",
+        "required": [
+          "pending"
+        ],
+        "properties": {
+          "pending": {
+            "type": "boolean",
+            "description": "Always true: the clip's analysis is queued or running."
+          }
+        }
+      },
+      "AnalysisStats": {
+        "type": "object",
+        "description": "The uploader's stats from the killfeed.",
+        "required": [
+          "kills",
+          "myKills",
+          "myDeaths",
+          "weapons",
+          "modifiers"
+        ],
+        "properties": {
+          "kills": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Kills in the clip, anyone's.",
+            "minimum": 0
+          },
+          "modifiers": {
+            "type": "object",
+            "description": "The uploader's kills per modifier (`headshot`, `wallbang`, `through_smoke`, ...).",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "multiKill": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Most of the uploader's kills in one round: `2k`, `3k`, `4k` or `ace`."
+          },
+          "myDeaths": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "myKills": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "weapons": {
+            "type": "object",
+            "description": "The uploader's kills per weapon (CS2 names: `ak47`, `awp`, ...).",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AnalysisStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "done"
+        ]
+      },
+      "CastVote": {
+        "type": "object",
+        "required": [
+          "clipId"
+        ],
+        "properties": {
+          "clipId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ClipAnalysis": {
+        "type": "object",
+        "required": [
+          "status",
+          "kills"
+        ],
+        "properties": {
+          "kills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KillView"
+            },
+            "description": "Every kill in the killfeed, in order."
+          },
+          "stats": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AnalysisStats",
+                "description": "Absent while pending."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/AnalysisStatus"
+          }
+        }
+      },
+      "ClipPage": {
+        "type": "object",
+        "required": [
+          "clips"
+        ],
+        "properties": {
+          "clips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClipView"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; absent on the last page."
+          }
+        }
+      },
+      "ClipStatus": {
+        "type": "string",
+        "enum": [
+          "uploading",
+          "processing",
+          "ready",
+          "failed"
+        ]
+      },
+      "ClipView": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "description",
+          "gameId",
+          "myPov",
+          "status",
+          "uploader",
+          "isMine",
+          "canEdit",
+          "originalFilename",
+          "originalBytes",
+          "tags",
+          "autoTags",
+          "players",
+          "reactions",
+          "reactionCount",
+          "createdAt",
+          "teaser"
+        ],
+        "properties": {
+          "autoTags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags found by killfeed analysis, e.g. `4k`, `hs`, `smoke-kill`."
+          },
+          "canEdit": {
+            "type": "boolean",
+            "description": "The viewer may edit and delete it (uploader or admin)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deletedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Set while it's in the trash (restorable for 7 days)."
+          },
+          "description": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why processing failed. Only shown to the uploader."
+          },
+          "failureReason": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Why a clip failed processing, for the uploader's failed screen. Worked out from the\nstored message (`clips.error`), whose permanent forms the worker writes with the\nconstants below.",
+                "enum": [
+                  "tooLong",
+                  "notAVideo",
+                  "unreadable",
+                  "server"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The kind of failure, for the uploader's failed screen."
+          },
+          "fps": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "gameId": {
+            "type": "string"
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "heldUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Saved for the show until then; only shown to the uploader."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "isMine": {
+            "type": "boolean"
+          },
+          "map": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "multiKill": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The uploader's best round from killfeed analysis: `2k`, `3k`, `4k` or `ace`."
+          },
+          "myPov": {
+            "type": "boolean"
+          },
+          "originalBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "originalFilename": {
+            "type": "string"
+          },
+          "playbackUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Read SAS (2 h) once ready; only on the single-clip endpoints."
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            },
+            "description": "Friends tagged as playing in it."
+          },
+          "posterUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Read SAS (2 h) once ready."
+          },
+          "reactionCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "reactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReactionCount"
+            }
+          },
+          "shareUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public link while sharing is on; only shown to those who can manage it."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClipStatus"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The uploader's tags (what editing the clip changes)."
+          },
+          "teaser": {
+            "type": "boolean",
+            "description": "Someone else's clip saved for the show: only its title, uploader, map and length,\nwith a blurred poster. No tags, killfeed or reactions, and no playback except for\npeople in the live show whose lineup has it (`GET /api/clips/{id}`, to preload it)."
+          },
+          "title": {
+            "type": "string"
+          },
+          "uploader": {
+            "$ref": "#/components/schemas/Uploader"
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "CreateClip": {
+        "type": "object",
+        "required": [
+          "title",
+          "filename",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "File size; at most 2 GiB."
+          },
+          "description": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Original file name; `.mp4`, `.mkv` or `.mov`."
+          },
+          "gameId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Defaults to `cs2`."
+          },
+          "hold": {
+            "type": "boolean",
+            "description": "\"Save it for the show\": hidden from others until it plays in a show, you post it,\nor a week passes. Ignored while shows aren't open to you."
+          },
+          "map": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "myPov": {
+            "type": "boolean",
+            "description": "Recorded from your own point of view."
+          },
+          "title": {
+            "type": "string",
+            "description": "1–100 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateInvite": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Role",
+                "description": "Defaults to `member`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreatedClip": {
+        "type": "object",
+        "required": [
+          "clip",
+          "uploadUrl"
+        ],
+        "properties": {
+          "clip": {
+            "$ref": "#/components/schemas/ClipView"
+          },
+          "uploadUrl": {
+            "type": "string",
+            "description": "Write SAS for the original: upload with Put Block + Put Block List, then call\n`POST /api/clips/{id}/complete`. Valid for 15 minutes plus a minute per 100 MB\n(at most 2 h)."
+          }
+        }
+      },
+      "DownloadLink": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Read SAS for the original that downloads with its file name (2 h)."
+          }
+        }
+      },
+      "EndShow": {
+        "type": "object",
+        "properties": {
+          "tieBreak": {
+            "$ref": "#/components/schemas/TieBreak",
+            "description": "The host's picks for tied categories."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "Error payload for every non-2xx `/api` response.",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Stable machine-readable code: `bad_request`, `unauthorized`, `not_invited`,\n`account_disabled`, `forbidden`, `not_found`, `conflict`, `unsupported_media_type`,\n`too_large`, `bad_gateway` or `internal`."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable detail. Never contains internals for 5xx responses."
+          },
+          "tied": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Ties",
+                "description": "Only on the 409 from ending a show with a tied vote: the tied clips of every tied\ncategory, so the host breaks them all at once."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "Invite": {
+        "type": "object",
+        "required": [
+          "email",
+          "role",
+          "createdAt"
+        ],
+        "properties": {
+          "acceptedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "First sign-in."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": "string"
+          },
+          "invitedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Handle of the admin who sent it; empty for invites seeded from `ADMIN_EMAILS`."
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "description": "Role the user gets on first sign-in."
+          }
+        }
+      },
+      "KillOwner": {
+        "type": "string",
+        "enum": [
+          "myKill",
+          "myDeath",
+          "other"
+        ]
+      },
+      "KillView": {
+        "type": "object",
+        "description": "One killfeed row, followed from when it appeared.",
+        "required": [
+          "t",
+          "owner",
+          "modifiers"
+        ],
+        "properties": {
+          "modifiers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`headshot`, `wallbang`, `through_smoke`, `noscope`, `blind`, `in_air`, ..."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/KillOwner"
+          },
+          "t": {
+            "type": "number",
+            "format": "double",
+            "description": "Seconds from the start of the clip."
+          },
+          "weapon": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CS2's name, e.g. `ak47`; absent when it couldn't be read."
+          }
+        }
+      },
+      "LineupEntry": {
+        "type": "object",
+        "required": [
+          "clip",
+          "position",
+          "dropped"
+        ],
+        "properties": {
+          "addedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Who put it in the lineup (the host for tonight's clips)."
+          },
+          "clip": {
+            "$ref": "#/components/schemas/ClipView"
+          },
+          "dropped": {
+            "type": "boolean",
+            "description": "Left out by the host; stays for the next show."
+          },
+          "playedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "Me": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/User"
+          },
+          {
+            "type": "object",
+            "required": [
+              "shows",
+              "showsForEveryone"
+            ],
+            "properties": {
+              "shows": {
+                "type": "boolean",
+                "description": "The show (lobby, hosting, the hold switch on upload) is open to you."
+              },
+              "showsForEveryone": {
+                "type": "boolean",
+                "description": "...and to everyone, so uploads default to \"Save it for the show\"."
+              }
+            }
+          }
+        ],
+        "description": "You, plus what's switched on for you."
+      },
+      "Member": {
+        "type": "object",
+        "description": "A user as other members see them (no email).",
+        "required": [
+          "id",
+          "handle",
+          "displayName"
+        ],
+        "properties": {
+          "avatarUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "steamName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "MyVotes": {
+        "type": "object",
+        "properties": {
+          "clip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "fail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "NewShowReaction": {
+        "type": "object",
+        "required": [
+          "clipId",
+          "emoji",
+          "atMs"
+        ],
+        "properties": {
+          "atMs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "When in the clip, in milliseconds."
+          },
+          "clipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "emoji": {
+            "type": "string",
+            "description": "One of the six reactions, or 🍌 (marks a fail)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ParticipantView": {
+        "type": "object",
+        "required": [
+          "member",
+          "joinedAt",
+          "ready"
+        ],
+        "properties": {
+          "joinedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "member": {
+            "$ref": "#/components/schemas/Member"
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Clicked \"I'm ready, sound on\"."
+          }
+        }
+      },
+      "PastShow": {
+        "type": "object",
+        "required": [
+          "id",
+          "host",
+          "participants",
+          "clips",
+          "clipWinnerVotes",
+          "failWinnerVotes",
+          "clipVoters",
+          "failVoters"
+        ],
+        "properties": {
+          "clipVoters": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "clipWinnerId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "clipWinnerVotes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Votes the winners got, and how many people voted in each category."
+          },
+          "clips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClipView"
+            },
+            "description": "The clips it played, in order."
+          },
+          "endedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "failVoters": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failWinnerId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "failWinnerVotes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "host": {
+            "$ref": "#/components/schemas/Member"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            },
+            "description": "Who was there."
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "Profile": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Member"
+          },
+          {
+            "type": "object",
+            "required": [
+              "clipCount",
+              "featuredCount",
+              "fireCount",
+              "joinedAt"
+            ],
+            "properties": {
+              "clipCount": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Clips they uploaded that you see: as many as `GET /api/clips?uploader={handle}`\nlists for you. Others' clips saved for the show (decision 29) and unpublished\nclips count only for their uploader."
+              },
+              "featuredCount": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Clips they play in (tagged by a friend), as many as `?player={handle}` lists."
+              },
+              "fireCount": {
+                "type": "integer",
+                "format": "int64",
+                "description": "🔥 reactions their published clips got."
+              },
+              "joinedAt": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When they first signed in."
+              }
+            }
+          }
+        ]
+      },
+      "PublicConfig": {
+        "type": "object",
+        "description": "Settings the SPA needs before it can log in. Served at runtime so one image works\nfor every environment.",
+        "required": [
+          "auth0Domain",
+          "auth0ClientId",
+          "auth0Audience"
+        ],
+        "properties": {
+          "auth0Audience": {
+            "type": "string"
+          },
+          "auth0ClientId": {
+            "type": "string"
+          },
+          "auth0Domain": {
+            "type": "string"
+          }
+        }
+      },
+      "ReactionCount": {
+        "type": "object",
+        "required": [
+          "emoji",
+          "count",
+          "mine"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "emoji": {
+            "type": "string"
+          },
+          "mine": {
+            "type": "boolean",
+            "description": "The viewer reacted with this emoji."
+          }
+        }
+      },
+      "RevokeInvite": {
+        "type": "object",
+        "description": "Emails travel in the body, never the URL, so they stay out of HTTP logs.",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Role": {
+        "type": "string",
+        "enum": [
+          "admin",
+          "member"
+        ]
+      },
+      "SetLineup": {
+        "type": "object",
+        "required": [
+          "clipIds"
+        ],
+        "properties": {
+          "clipIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The clips still to play, in order. Ones left out are dropped (they stay for the\nnext show)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SetReady": {
+        "type": "object",
+        "required": [
+          "ready"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ShowReactionView": {
+        "type": "object",
+        "required": [
+          "clipId",
+          "userId",
+          "emoji",
+          "atMs"
+        ],
+        "properties": {
+          "atMs": {
+            "type": "integer",
+            "format": "int32",
+            "description": "When in the clip, in milliseconds."
+          },
+          "clipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "emoji": {
+            "type": "string"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ShowView": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "host",
+          "createdAt",
+          "lineup",
+          "participants",
+          "failContenders",
+          "votes",
+          "voters",
+          "myVotes",
+          "reactions"
+        ],
+        "properties": {
+          "clipWinnerId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "failContenders": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Clips someone marked with 🍌: the fail of the night contenders."
+          },
+          "failWinnerId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "host": {
+            "$ref": "#/components/schemas/Member"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "lineup": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LineupEntry"
+            },
+            "description": "In order: played clips first, then what's still to come; dropped ones last."
+          },
+          "myVotes": {
+            "$ref": "#/components/schemas/MyVotes",
+            "description": "The viewer's own votes."
+          },
+          "participants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParticipantView"
+            }
+          },
+          "reactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShowReactionView"
+            },
+            "description": "Every reaction tap, in clip order and time, for the replay."
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "lobby",
+              "live",
+              "finale",
+              "ended",
+              "abandoned"
+            ]
+          },
+          "voters": {
+            "$ref": "#/components/schemas/Voters",
+            "description": "Who has voted so far, per category: the finale's \"3 of 4 voted\"."
+          },
+          "votes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VoteCountView"
+            },
+            "description": "Votes per clip, once the show has ended. Empty until then, for everyone, so the\nreveal isn't spoiled (decision 43)."
+          }
+        }
+      },
+      "TieBreak": {
+        "type": "object",
+        "description": "The host's pick when a category's vote ties (decision 31).",
+        "properties": {
+          "clip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "fail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Ties": {
+        "type": "object",
+        "description": "The tied clips of each category when `end` needs the host's pick; empty for a\ncategory that isn't tied.",
+        "required": [
+          "clip",
+          "fail"
+        ],
+        "properties": {
+          "clip": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "fail": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "Tonight": {
+        "type": "object",
+        "required": [
+          "clips"
+        ],
+        "properties": {
+          "clips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClipView"
+            },
+            "description": "With no show on: the clips the next one would play, in upload order."
+          },
+          "lastShow": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PastShow",
+                "description": "The last show that ended, for the lobby's \"Last show\" line."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "show": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ShowView",
+                "description": "The show that's on (lobby, live or finale), if any."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "UpdateClip": {
+        "type": "object",
+        "description": "Fields to change; omitted fields stay as they are.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "map": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`null` or an empty string clears it."
+          },
+          "myPov": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "players": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Replaces the friends tagged as playing (user ids, up to 10). Friends tagged\nalready may stay after they've been disabled; new ones must be active members."
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Replaces the tags (up to 10; letters, digits and `-`)."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateProfile": {
+        "type": "object",
+        "description": "Profile fields to change; omitted fields stay as they are.",
+        "properties": {
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "1–50 characters."
+          },
+          "handle": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "2–32 characters: `a–z`, `0–9`, `-`, `_`, starting with a letter or digit."
+          },
+          "steamName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 64 characters; an empty string clears it."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateUserAccess": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Role"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UserStatus",
+                "description": "`disabled` blocks sign-in; their clips stay."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Uploader": {
+        "type": "object",
+        "required": [
+          "handle",
+          "displayName"
+        ],
+        "properties": {
+          "avatarUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "handle",
+          "displayName",
+          "role",
+          "status",
+          "createdAt"
+        ],
+        "properties": {
+          "avatarUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UserStatus"
+          },
+          "steamName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UserStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "disabled"
+        ]
+      },
+      "VoteCountView": {
+        "type": "object",
+        "required": [
+          "category",
+          "clipId",
+          "votes"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "clip",
+              "fail"
+            ]
+          },
+          "clipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "votes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Voters": {
+        "type": "object",
+        "description": "Who has voted in each category (user ids), not for what.",
+        "required": [
+          "clip",
+          "fail"
+        ],
+        "properties": {
+          "clip": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "fail": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}

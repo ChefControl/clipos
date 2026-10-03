@@ -1,0 +1,238 @@
+name: Deploy
+
+# CD: every merge to main that touches the app, once the gate (gate.yml) confirms the pull
+# request's checks tested exactly this code: build both binaries and the SPA, push both
+# images to ACR, then roll both web apps to the new tag and wait until /healthz reports
+# it. Run workflow by hand skips the gate (an override). The database and its
+# login roles are set up by the Infra workflow (after an Azure apply); the api runs the
+# migrations itself at startup.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "migrations/**"
+      - "web/**"
+      - "deploy/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: rg-clipos
+
+jobs:
+  gate:
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: ./.github/workflows/gate.yml
+
+  # Both binaries in one cargo build (they share most dependencies) and the SPA, on the
+  # runner with warm caches; the images only copy them in (see deploy/*.Dockerfile). No
+  # Azure access here: build scripts and packages run where no token can be minted.
+  build:
+    needs: gate
+    if: ${{ !cancelled() && !failure() }}
+    # Pinned: binaries built here run on the images' Debian trixie (glibc 2.41), so the
+    # runner's glibc must not be newer (Ubuntu 24.04 has 2.39).
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # The images job restores what this built by these cache keys.
+    outputs:
+      bins: ${{ steps.bins.outputs.cache-primary-key }}
+      spa: ${{ steps.spa.outputs.cache-primary-key }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The finished binaries and SPA, each keyed on everything that goes into it: a deploy
+      # that changes no Rust (web, Dockerfiles, workflows) reuses the binaries instead of
+      # compiling, and one that changes nothing in web/ reuses the SPA. cargo can't tell on
+      # its own, since a fresh checkout makes every source file look newer than any cached
+      # build.
+      - id: bins
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out
+          key: bins-${{ hashFiles('crates/**', 'migrations/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml') }}
+      - id: spa
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: web/dist
+          key: spa-${{ hashFiles('web/**') }}
+      - if: steps.bins.outputs.cache-hit != 'true'
+        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          # CI already denies warnings; a release build shouldn't fail on one.
+          build-warnings: warn
+      - if: steps.spa.outputs.cache-hit != 'true'
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: web/package.json
+      - if: steps.spa.outputs.cache-hit != 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build the SPA
+        if: steps.spa.outputs.cache-hit != 'true'
+        working-directory: web
+        run: pnpm install --frozen-lockfile && pnpm build
+      - if: steps.spa.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: web/dist
+          key: ${{ steps.spa.outputs.cache-primary-key }}
+      - name: Build the api and worker
+        if: steps.bins.outputs.cache-hit != 'true'
+        run: |
+          cargo build --release --locked -p clipos-api -p clipos-worker
+          mkdir -p out/api out/worker
+          cp target/release/clipos-api out/api/
+          cp target/release/clipos-worker out/worker/
+      - if: steps.bins.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out
+          key: ${{ steps.bins.outputs.cache-primary-key }}
+
+  # Wraps the build in the images and pushes them; the first job that can log in to Azure.
+  images:
+    needs: build
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # The Azure IDs belong in secrets, which the runner masks; variables of the same
+      # names, the fallback until they're moved, are printed (as in infra.yml). This covers
+      # release too, which runs only after this job.
+      - name: Azure IDs come from secrets
+        if: >-
+          vars.AZURE_SUBSCRIPTION_ID != '' || vars.AZURE_TENANT_ID != ''
+          || vars.AZURE_CLIENT_ID_PLAN != '' || vars.AZURE_CLIENT_ID_DEPLOY != ''
+          || vars.ADMIN_EMAILS != ''
+        env:
+          PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          msg="Move AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID, AZURE_CLIENT_ID_PLAN, AZURE_CLIENT_ID_DEPLOY and ADMIN_EMAILS from Actions variables to secrets, then delete the variables."
+          if [ "$PRIVATE" != true ]; then
+            echo "::error::This repository's logs are public. $msg"
+            exit 1
+          fi
+          echo "::warning::$msg"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: out
+          key: ${{ needs.build.outputs.bins }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: web/dist
+          key: ${{ needs.build.outputs.spa }}
+          fail-on-cache-miss: true
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_DEPLOY || vars.AZURE_CLIENT_ID_DEPLOY }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+      - id: acr
+        run: |
+          name=$(az acr list -g "$RESOURCE_GROUP" --query '[0].name' -o tsv)
+          server=$(az acr show -n "$name" --query loginServer -o tsv)
+          # The log is public: the registry's name stays out of it, image tags included.
+          echo "::add-mask::$name"
+          echo "::add-mask::$server"
+          az acr login --name "$name"
+          echo "server=$server" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: api image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          # No job summary or build record artifact: both carry the push's full details.
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          file: deploy/api.Dockerfile
+          build-contexts: |
+            bin=out/api
+            spa=web/dist
+          push: true
+          tags: ${{ steps.acr.outputs.server }}/clipos-api:${{ github.sha }}
+          build-args: CLIPOS_VERSION=${{ github.sha }}
+          cache-from: type=gha,scope=api-runtime
+          cache-to: type=gha,scope=api-runtime
+      - name: worker image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          file: deploy/worker.Dockerfile
+          build-contexts: bin=out/worker
+          push: true
+          tags: ${{ steps.acr.outputs.server }}/clipos-worker:${{ github.sha }}
+          build-args: CLIPOS_VERSION=${{ github.sha }}
+          cache-from: type=gha,scope=worker-runtime
+          cache-to: type=gha,scope=worker-runtime
+
+  release:
+    needs: images
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_DEPLOY || vars.AZURE_CLIENT_ID_DEPLOY }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+      # Each web app's name and hostname are masked as soon as they're looked up.
+      - name: Point both web apps at the new images
+        run: |
+          server=$(az acr list -g "$RESOURCE_GROUP" --query '[0].loginServer' -o tsv)
+          echo "::add-mask::$server"
+          for component in api worker; do
+            name=$(az webapp list -g "$RESOURCE_GROUP" --query "[?tags.component=='$component'].name | [0]" -o tsv)
+            echo "::add-mask::$name"
+            az webapp config set -g "$RESOURCE_GROUP" -n "$name" -o none \
+              --linux-fx-version "DOCKER|${server}/clipos-${component}:${GITHUB_SHA}"
+          done
+      - name: Wait for /healthz to report this build
+        run: |
+          for component in api worker; do
+            host=$(az webapp list -g "$RESOURCE_GROUP" --query "[?tags.component=='$component'].defaultHostName | [0]" -o tsv)
+            echo "::add-mask::$host"
+            echo "waiting for ${component}'s /healthz"
+            for _ in $(seq 60); do
+              version=$(curl -fsS -o /dev/null -D - --max-time 10 "https://${host}/healthz" \
+                | tr -d '\r' | awk -F': ' 'tolower($1) == "x-clipos-version" { print $2 }') || true
+              if [ "$version" = "$GITHUB_SHA" ]; then
+                echo "${component} is serving ${GITHUB_SHA}"
+                continue 2
+              fi
+              sleep 10
+            done
+            echo "::error::${component} did not report ${GITHUB_SHA} within 10 minutes"
+            exit 1
+          done

@@ -1,0 +1,60 @@
+# OpenTofu
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+plan.txt
+crash.log
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+.env
+.env.*
+!.env.example
+
+# Keys and certificates (the test RSA pair is made up, see crates/core/tests/fixtures)
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.*
+!crates/core/tests/fixtures/*.pem
+
+# Database dumps and logs (migrations and the role script are SQL we keep)
+*.sql
+!/migrations/*.sql
+!/deploy/db/*.sql
+*.log
+
+# Rust
+/target
+
+# Web, and any other Node or Python tooling
+node_modules/
+web/dist/
+.npmrc
+.venv/
+venv/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Playwright
+dist-e2e/
+test-results/
+playwright-report/
+
+# Coverage
+.nyc_output/
+coverage/
+
+# Local agent settings
+.claude/
+CLAUDE.local.md
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store

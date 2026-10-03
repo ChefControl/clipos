@@ -1,0 +1,355 @@
+name: Infra
+
+# Pull requests from this repo's branches get a plan summary comment (tofu's "Plan: …" line
+# and the addresses that change), which is the review. CD: a merge to main that changes a
+# stack applies it, once the gate (gate.yml) confirms the pull request's checks tested
+# exactly this code; an automatic apply refuses a plan that destroys or replaces anything.
+# "Run workflow" on main applies a stack by hand (destroys included) and skips the gate.
+#
+# Logs and comments are public, so no full plan or apply output is ever printed: it names
+# every resource, its settings and the Azure IDs. Run `tofu plan` locally for the details.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/auth0/**"
+      - "infra/azure/**"
+  pull_request:
+    paths:
+      - "infra/auth0/**"
+      - "infra/azure/**"
+      - ".github/workflows/infra.yml"
+      - ".github/plan-summary.jq"
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: Stack to apply
+        type: choice
+        options: [azure, auth0]
+        default: azure
+      exclude:
+        description: >-
+          Optional resource address to leave out (tofu -exclude). Normally empty.
+        type: string
+        default: ""
+
+permissions: {}
+
+# Merges to main run one at a time, in order, so an older merge's apply never lands after
+# a newer one's and undoes it. GitHub keeps only one run waiting per group: a third merge
+# replaces a waiting second, so if the second changed a stack the third doesn't, apply that
+# stack with Run workflow. A pull request's plans queue on its number, not its branch name,
+# which a fork picks and could match another queue. Manual runs get a group of their own;
+# the apply job's queue keeps them apart from a merge's apply.
+concurrency:
+  group: infra-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && 'main' || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  TOFU_VERSION: 1.12.5
+  # State backend (azurerm) logs in via GitHub OIDC; no stored Azure secrets.
+  ARM_USE_OIDC: "true"
+  ARM_USE_AZUREAD: "true"
+
+jobs:
+  plan:
+    # Branches of this repo only: a fork's pull request gets no secrets or OIDC token, so
+    # its plan could only fail.
+    if: >-
+      github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    strategy:
+      fail-fast: false
+      matrix:
+        stack: [auth0, azure]
+    env:
+      STACK: ${{ matrix.stack }}
+    steps:
+      # The Azure IDs and admin emails belong in secrets, which the runner masks. Until
+      # they're moved, the workflow falls back to variables of the same names, which every
+      # step header that reads them prints: a warning in a private repo, and in a public
+      # one the job stops here. Only this condition reads them, so nothing is printed.
+      - name: Azure IDs come from secrets
+        if: >-
+          vars.AZURE_SUBSCRIPTION_ID != '' || vars.AZURE_TENANT_ID != ''
+          || vars.AZURE_CLIENT_ID_PLAN != '' || vars.AZURE_CLIENT_ID_DEPLOY != ''
+          || vars.ADMIN_EMAILS != ''
+        env:
+          PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          msg="Move AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID, AZURE_CLIENT_ID_PLAN, AZURE_CLIENT_ID_DEPLOY and ADMIN_EMAILS from Actions variables to secrets, then delete the variables."
+          if [ "$PRIVATE" != true ]; then
+            echo "::error::This repository's logs are public. $msg"
+            exit 1
+          fi
+          echo "::warning::$msg"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - id: plan
+        name: Plan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_PLAN || vars.AZURE_CLIENT_ID_PLAN }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+          # Each stack gets only its own credentials: auth0's provider (the clipos-opentofu
+          # M2M app) and Google secret, azure's admin emails and the admin's Entra identity
+          # (infra/azure/README.md).
+          AUTH0_DOMAIN: ${{ matrix.stack == 'auth0' && vars.AUTH0_DOMAIN || '' }}
+          AUTH0_CLIENT_ID: ${{ matrix.stack == 'auth0' && secrets.AUTH0_CLIENT_ID || '' }}
+          AUTH0_CLIENT_SECRET: ${{ matrix.stack == 'auth0' && secrets.AUTH0_CLIENT_SECRET || '' }}
+          TF_VAR_google_client_id: ${{ matrix.stack == 'auth0' && vars.GOOGLE_CLIENT_ID || '' }}
+          TF_VAR_google_client_secret: ${{ matrix.stack == 'auth0' && secrets.GOOGLE_CLIENT_SECRET || '' }}
+          TF_VAR_admin_emails: ${{ matrix.stack == 'azure' && (secrets.ADMIN_EMAILS || vars.ADMIN_EMAILS) || '' }}
+          TF_VAR_admin_user: ${{ matrix.stack == 'azure' && secrets.ADMIN_USER || '' }}
+        run: |
+          set -o pipefail
+          dir="infra/$STACK"
+          tofu -chdir="$dir" init -input=false -no-color
+          # Masks what the stack outputs (resource names, hostnames, identity IDs) in the
+          # rest of this job's log, e.g. in an error message.
+          tofu -chdir="$dir" output -json \
+            | jq -r '.[] | select(.sensitive | not) | .value | .. | strings | select(. != "")' \
+            | while read -r value; do echo "::add-mask::$value"; done
+          # The plan stays on the runner. A failed one shows only its errors' headlines.
+          # No state lease: taking it is a write, and a plan never writes state, so the
+          # plan identity only needs to read it (infra/bootstrap).
+          if ! tofu -chdir="$dir" plan -input=false -lock=false -no-color -compact-warnings -out=tfplan > plan.log 2>&1; then
+            sed -nE 's/^(│ )?(Error: .*)/\2/p' plan.log
+            exit 1
+          fi
+          tofu -chdir="$dir" show -json tfplan | jq -r -f .github/plan-summary.jq | tee summary.txt
+      - name: Comment plan on PR
+        if: always() && steps.plan.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.plan.outcome }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          marker="<!-- tofu-plan:${STACK} -->"
+          {
+            echo "$marker"
+            echo "### \`infra/${STACK}\` plan: ${OUTCOME}"
+            echo
+            if [ -s summary.txt ]; then
+              echo '```'
+              cat summary.txt
+              echo '```'
+            else
+              echo "No plan: the run's log has the error."
+            fi
+            echo
+            echo "Addresses and actions only; run \`tofu plan\` locally for the attribute changes."
+          } > comment.md
+          # One comment per stack, updated in place on every push.
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+            --jq "[.[] | select(.body | startswith(\"${marker}\"))][0].id // empty")
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F body=@comment.md >/dev/null
+          else
+            gh pr comment "$PR" --body-file comment.md
+          fi
+
+  # Which stacks a merge to main changed.
+  stacks:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      list: ${{ steps.diff.outputs.list }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+          list=$(for stack in azure auth0; do
+            grep -q "^infra/$stack/" <<< "$files" && echo "\"$stack\""
+          done | paste -sd, -)
+          echo "list=[$list]" >> "$GITHUB_OUTPUT"
+
+  gate:
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    uses: ./.github/workflows/gate.yml
+
+  apply:
+    needs: [stacks, gate]
+    if: >-
+      ${{ !cancelled() && !failure() && github.ref == 'refs/heads/main'
+      && (github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'push' && needs.stacks.outputs.list != '[]')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      max-parallel: 1
+      matrix:
+        stack: ${{ fromJSON(github.event_name == 'push' && needs.stacks.outputs.list || format('["{0}"]', inputs.stack)) }}
+    # One apply per stack at a time, whether from a merge or by hand.
+    concurrency:
+      group: infra-apply-${{ matrix.stack }}
+      cancel-in-progress: false
+    env:
+      STACK: ${{ matrix.stack }}
+    steps:
+      # As in the plan job.
+      - name: Azure IDs come from secrets
+        if: >-
+          vars.AZURE_SUBSCRIPTION_ID != '' || vars.AZURE_TENANT_ID != ''
+          || vars.AZURE_CLIENT_ID_PLAN != '' || vars.AZURE_CLIENT_ID_DEPLOY != ''
+          || vars.ADMIN_EMAILS != ''
+        env:
+          PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          msg="Move AZURE_SUBSCRIPTION_ID, AZURE_TENANT_ID, AZURE_CLIENT_ID_PLAN, AZURE_CLIENT_ID_DEPLOY and ADMIN_EMAILS from Actions variables to secrets, then delete the variables."
+          if [ "$PRIVATE" != true ]; then
+            echo "::error::This repository's logs are public. $msg"
+            exit 1
+          fi
+          echo "::warning::$msg"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - name: Plan
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_DEPLOY || vars.AZURE_CLIENT_ID_DEPLOY }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+          AUTH0_DOMAIN: ${{ matrix.stack == 'auth0' && vars.AUTH0_DOMAIN || '' }}
+          AUTH0_CLIENT_ID: ${{ matrix.stack == 'auth0' && secrets.AUTH0_CLIENT_ID || '' }}
+          AUTH0_CLIENT_SECRET: ${{ matrix.stack == 'auth0' && secrets.AUTH0_CLIENT_SECRET || '' }}
+          TF_VAR_google_client_id: ${{ matrix.stack == 'auth0' && vars.GOOGLE_CLIENT_ID || '' }}
+          TF_VAR_google_client_secret: ${{ matrix.stack == 'auth0' && secrets.GOOGLE_CLIENT_SECRET || '' }}
+          TF_VAR_admin_emails: ${{ matrix.stack == 'azure' && (secrets.ADMIN_EMAILS || vars.ADMIN_EMAILS) || '' }}
+          TF_VAR_admin_user: ${{ matrix.stack == 'azure' && secrets.ADMIN_USER || '' }}
+          EXCLUDE: ${{ inputs.exclude }}
+        run: |
+          set -o pipefail
+          dir="infra/$STACK"
+          tofu -chdir="$dir" init -input=false -no-color
+          tofu -chdir="$dir" output -json \
+            | jq -r '.[] | select(.sensitive | not) | .value | .. | strings | select(. != "")' \
+            | while read -r value; do echo "::add-mask::$value"; done
+          if ! tofu -chdir="$dir" plan -input=false -no-color -compact-warnings -out=tfplan \
+            ${EXCLUDE:+-exclude="$EXCLUDE"} > plan.log 2>&1; then
+            sed -nE 's/^(│ )?(Error: .*)/\2/p' plan.log
+            exit 1
+          fi
+          tofu -chdir="$dir" show -json tfplan > plan.json
+          jq -r -f .github/plan-summary.jq plan.json
+      # An automatic apply never deletes: a plan that destroys or replaces a resource
+      # stops here and needs Run workflow by hand.
+      - name: No destroys in an automatic apply
+        if: github.event_name == 'push'
+        run: |
+          gone=$(jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | .address' plan.json)
+          if [ -n "$gone" ]; then
+            echo "::error::This plan destroys or replaces resources (listed under Plan), so it isn't applied automatically. Review it and apply with Run workflow."
+            exit 1
+          fi
+      - name: Apply
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID_DEPLOY || vars.AZURE_CLIENT_ID_DEPLOY }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+          AUTH0_DOMAIN: ${{ matrix.stack == 'auth0' && vars.AUTH0_DOMAIN || '' }}
+          AUTH0_CLIENT_ID: ${{ matrix.stack == 'auth0' && secrets.AUTH0_CLIENT_ID || '' }}
+          AUTH0_CLIENT_SECRET: ${{ matrix.stack == 'auth0' && secrets.AUTH0_CLIENT_SECRET || '' }}
+          # Ephemeral, so the saved plan doesn't hold it.
+          TF_VAR_google_client_secret: ${{ matrix.stack == 'auth0' && secrets.GOOGLE_CLIENT_SECRET || '' }}
+        run: |
+          set -o pipefail
+          # Each resource's progress without its [id=…], and each error's headline; not the
+          # outputs at the end, which list the resource names and hostnames.
+          tofu -chdir="infra/$STACK" apply -input=false -no-color -compact-warnings tfplan 2>&1 \
+            | sed -nE -e 's/ \[id=[^]]*\]//' -e 's/\["[^"]*[^a-z0-9_"][^"]*"\]/[...]/g' \
+              -e '/^[a-z][^ ]*\.[^ ]*: ([A-Z][a-z]+\.\.\.|[A-Z][a-z]+ complete|Still )/p' \
+              -e '/^Apply complete!/p' -e 's/^(│ )?(Error: .*)/\2/p'
+
+      # The database and the web apps' login roles (deploy/db/bootstrap.sh), after every
+      # Azure apply: the apply is what creates the server and the apps' identities, so this
+      # is the one place they can change. Roles are SQL inside Postgres, which OpenTofu
+      # doesn't manage. Idempotent; an apply with no changes just re-checks them.
+      - if: matrix.stack == 'azure'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_DEPLOY || vars.AZURE_CLIENT_ID_DEPLOY }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
+      - id: db
+        if: matrix.stack == 'azure'
+        run: |
+          rg="rg-clipos"
+          app_oid() {
+            az webapp list -g "$rg" --query "[?tags.component=='$1'].identity.principalId | [0]" -o tsv
+          }
+          server=$(az postgres flexible-server list -g "$rg" --query '[0].name' -o tsv)
+          fqdn=$(az postgres flexible-server list -g "$rg" --query '[0].fullyQualifiedDomainName' -o tsv)
+          api_oid=$(app_oid api)
+          worker_oid=$(app_oid worker)
+          # Masked before they reach the next steps' env, which the log prints.
+          for value in "$server" "$fqdn" "$api_oid" "$worker_oid"; do
+            if [ -n "$value" ]; then echo "::add-mask::$value"; fi
+          done
+          {
+            echo "rg=$rg"
+            echo "server=$server"
+            echo "fqdn=$fqdn"
+            echo "api_oid=$api_oid"
+            echo "worker_oid=$worker_oid"
+          } >> "$GITHUB_OUTPUT"
+      # The firewall only admits the web apps (decision 19); let this runner in briefly.
+      - name: Open the Postgres firewall for this runner
+        id: open
+        if: matrix.stack == 'azure'
+        env:
+          RG: ${{ steps.db.outputs.rg }}
+          SERVER: ${{ steps.db.outputs.server }}
+        run: |
+          ip=$(curl -fsS https://api.ipify.org)
+          echo "::add-mask::$ip"
+          az postgres flexible-server firewall-rule create -g "$RG" --server-name "$SERVER" \
+            --name "gh-run-${GITHUB_RUN_ID}" --start-ip-address "$ip" --end-ip-address "$ip" -o none
+      - name: Create the database and login roles
+        if: matrix.stack == 'azure'
+        env:
+          PGHOST: ${{ steps.db.outputs.fqdn }}
+          PGUSER: id-clipos-github-deploy
+          API_OID: ${{ steps.db.outputs.api_oid }}
+          WORKER_OID: ${{ steps.db.outputs.worker_oid }}
+        run: |
+          PGPASSWORD=$(az account get-access-token --resource-type oss-rdbms --query accessToken -o tsv)
+          echo "::add-mask::$PGPASSWORD"
+          export PGPASSWORD
+          deploy/db/bootstrap.sh
+      - name: Close the Postgres firewall
+        if: always() && steps.open.outcome != 'skipped' && steps.db.outputs.server != ''
+        env:
+          RG: ${{ steps.db.outputs.rg }}
+          SERVER: ${{ steps.db.outputs.server }}
+        run: |
+          az postgres flexible-server firewall-rule delete -g "$RG" --server-name "$SERVER" \
+            --name "gh-run-${GITHUB_RUN_ID}" --yes -o none

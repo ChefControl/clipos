@@ -1,0 +1,51 @@
+# Version updates, weekly. Minor and patch updates come as one pull request per ecosystem;
+# a major update gets its own. Actions are pinned to commit SHAs, which Dependabot moves
+# along with their "# vX.Y.Z" comments. A release has to be a week old before it's
+# proposed, so one that's pulled after a compromise never is; security updates don't wait.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      web:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The Dockerfiles' base images. The images CI and the audit run (Postgres, Azurite,
+  # ffmpeg, Trivy) are pinned by digest in the workflows, which Dependabot doesn't update.
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      images:
+        patterns: ["*"]
+        update-types: [minor, patch]

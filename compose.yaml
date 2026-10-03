@@ -1,0 +1,62 @@
+# Local development. `docker compose up -d` starts the dependencies only;
+# `docker compose --profile app up --build` also runs api + worker from their images.
+name: clipos
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: clipos
+      POSTGRES_PASSWORD: clipos
+      POSTGRES_DB: clipos
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clipos -d clipos"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --location /data --skipApiVersionCheck
+    ports:
+      - "127.0.0.1:10000:10000"
+    volumes:
+      - azurite:/data
+
+  api:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: deploy/api.Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://clipos:clipos@postgres:5432/clipos
+      BIND_ADDR: 0.0.0.0:8080
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: deploy/worker.Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://clipos:clipos@postgres:5432/clipos
+      STORAGE_BLOB_ENDPOINT: http://azurite:10000/devstoreaccount1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+volumes:
+  postgres:
+  azurite:

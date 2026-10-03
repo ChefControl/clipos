@@ -1,0 +1,284 @@
+name: CI
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+# The pull request gates. Every job runs on its own, in parallel, on each push to the
+# branch: tests with coverage (rust-coverage, web-coverage: below 95 % of lines fails) and
+# the checks (lint, deny, the web's types, typecheck and build, auth0, infra). Results
+# count for the commit they ran on only, and only while the branch holds the latest main
+# (docs/quality-checkpoint.md). CD (deploy.yml, infra.yml) runs on main after the merge.
+jobs:
+  # Which parts of the repo the change touches, so e.g. a docs or infra change doesn't wait
+  # for the Rust and browser jobs. A job that isn't needed is skipped, which counts as
+  # passing. Changing this workflow runs everything.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+      web: ${{ steps.diff.outputs.web }}
+      auth0: ${{ steps.diff.outputs.auth0 }}
+      infra: ${{ steps.diff.outputs.infra }}
+      playwright: ${{ steps.diff.outputs.playwright }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            files=$(git diff --name-only "$BASE"...HEAD)
+          else
+            files=ALL  # first push of a branch, or a force push: check everything
+          fi
+          printf '%s\n' "$files"
+          touched() {
+            if [ "$files" = ALL ] || grep -qE "$1|^\.github/workflows/ci\.yml$" <<< "$files"; then
+              echo true
+            else
+              echo false
+            fi
+          }
+          {
+            echo "rust=$(touched '^(crates/|migrations/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|deny\.toml$|web/openapi\.json$)')"
+            echo "web=$(touched '^web/')"
+            echo "auth0=$(touched '^infra/auth0/actions/')"
+            echo "infra=$(touched '^infra/')"
+            echo "playwright=$(grep -m1 -oE "'@playwright/test@[0-9]+\.[0-9]+\.[0-9]+'" web/pnpm-lock.yaml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
+          } >> "$GITHUB_OUTPUT"
+
+  rust-lint:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Reads rust-toolchain.toml and caches ~/.cargo + target/.
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: OpenAPI spec is up to date
+        run: |
+          cargo run -q --locked -p clipos-api --bin openapi > web/openapi.json
+          git diff --exit-code web/openapi.json || {
+            echo "::error::web/openapi.json is stale. Run 'make gen-api' and commit."; exit 1; }
+
+  # Known vulnerabilities, licences and crate sources (deny.toml).
+  rust-deny:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+
+  # Gate: the Rust tests with coverage; below 95 % of lines fails.
+  rust-coverage:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DATABASE_URL: postgres://clipos:clipos@localhost:5432/clipos
+      CARGO_TERM_COLOR: always
+      # Storage + transcode tests run against Azurite with a real ffmpeg.
+      CLIPOS_AZURITE: "1"
+      # The killfeed tests run the stand-in models on ONNX Runtime; fail rather than skip
+      # them if it's missing.
+      ORT_DYLIB_PATH: /tmp/onnxruntime/libonnxruntime.so
+      CLIPOS_REQUIRE_ORT: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Started in the background (rather than as job services) so pulling the images,
+      # ffmpeg and ONNX Runtime overlap with compiling the tests. Every image is pinned by
+      # digest. ffmpeg is a static 7.1 build (production runs Debian trixie's 7.1): one
+      # ~120 MB pull instead of ~45 s of apt. ONNX Runtime is the release
+      # deploy/worker.Dockerfile installs, checked against the same SHA-256.
+      - name: Start Postgres and Azurite, fetch ffmpeg and ONNX Runtime
+        env:
+          POSTGRES_IMAGE: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+          AZURITE_IMAGE: mcr.microsoft.com/azure-storage/azurite:3.37.0@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5
+          FFMPEG_IMAGE: mwader/static-ffmpeg:7.1.1-amd64@sha256:6769881cc02c80d33e387750a8e144d162adfab2775e934dd97899261dda3a0c
+          ORT_VERSION: 1.28.2
+          ORT_SHA256: d7209b8751b27b862b0c76332c2e20e203396edb5dab700ecf4bb485cf147415
+        run: |
+          (curl -fsSL -o /tmp/ort.tgz \
+              "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+            && echo "${ORT_SHA256}  /tmp/ort.tgz" | sha256sum -c - \
+            && mkdir -p /tmp/onnxruntime \
+            && tar -xzf /tmp/ort.tgz -C /tmp/onnxruntime --strip-components=2 \
+              "onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION}" \
+            && ln -s "libonnxruntime.so.${ORT_VERSION}" "$ORT_DYLIB_PATH"
+           echo $? > /tmp/ort.status) > /tmp/ort.log 2>&1 &
+          docker run -d --name postgres -p 5432:5432 -e POSTGRES_USER=clipos \
+            -e POSTGRES_PASSWORD=clipos -e POSTGRES_DB=clipos "$POSTGRES_IMAGE" \
+            > /tmp/postgres.log 2>&1 &
+          docker run -d --name azurite -p 10000:10000 \
+            "$AZURITE_IMAGE" > /tmp/azurite.log 2>&1 &
+          (id=$(docker create "$FFMPEG_IMAGE") \
+            && sudo docker cp "$id:/ffmpeg" /usr/local/bin/ffmpeg \
+            && sudo docker cp "$id:/ffprobe" /usr/local/bin/ffprobe \
+            && docker rm "$id" >/dev/null
+           echo $? > /tmp/ffmpeg.status) > /tmp/ffmpeg.log 2>&1 &
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@861a07ce7084f55488e375df125cdc99bba60eb7 # v2.87.23
+        with:
+          tool: cargo-llvm-cov
+      # The tests build and run instrumented, so coverage needs no second build.
+      - name: Instrument the tests for coverage
+        run: cargo llvm-cov show-env | sed "s/='\(.*\)'$/=\1/" >> "$GITHUB_ENV"
+      - name: Build the tests
+        run: cargo test --workspace --locked --no-run
+      - name: Wait for Postgres, Azurite, ffmpeg and ONNX Runtime
+        run: |
+          for _ in $(seq 180); do [ -f /tmp/ffmpeg.status ] && break; sleep 1; done
+          [ "$(cat /tmp/ffmpeg.status 2>/dev/null)" = 0 ] || { cat /tmp/ffmpeg.log; exit 1; }
+          ffmpeg -hide_banner -version | head -1
+          for _ in $(seq 180); do [ -f /tmp/ort.status ] && break; sleep 1; done
+          [ "$(cat /tmp/ort.status 2>/dev/null)" = 0 ] || { cat /tmp/ort.log; exit 1; }
+          ls -l "$ORT_DYLIB_PATH"
+          for _ in $(seq 120); do
+            docker exec postgres pg_isready -q -U clipos -d clipos 2>/dev/null \
+              && curl -s -o /dev/null http://127.0.0.1:10000/ && exit 0
+            sleep 1
+          done
+          cat /tmp/postgres.log /tmp/azurite.log; exit 1
+      - run: cargo test --workspace --locked
+      # Below 95 % of lines fails (docs/quality-checkpoint.md).
+      - name: Coverage floor
+        run: cargo llvm-cov report --summary-only --fail-under-lines 95
+
+  # Gate: the web tests with coverage, in one job. Vitest, then the browser regression
+  # tests on an iPhone (WebKit), an Android phone (Chromium) and a 1440 px desktop Chrome
+  # against the instrumented build (API mocked), merged; below 95 % of lines fails. Playwright's own image has the browsers and their system packages; its
+  # tag follows the lockfile's @playwright/test, so the two always match (which is why it
+  # isn't pinned by digest like the other images).
+  web-coverage:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: mcr.microsoft.com/playwright:v${{ needs.changes.outputs.playwright }}-noble
+      options: --ipc=host
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Tests, with a coverage floor
+        run: pnpm coverage
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: screenshots
+          path: web/playwright-report/
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage
+          path: web/coverage/
+          retention-days: 14
+
+  # Gate: the web's other checks.
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: API types match openapi.json
+        run: |
+          pnpm gen:api
+          git diff --exit-code src/api/schema.d.ts || {
+            echo "::error::src/api/schema.d.ts is stale. Run 'make gen-api' and commit."; exit 1; }
+      - run: pnpm lint
+      - run: pnpm audit --audit-level high
+      - run: pnpm typecheck
+      - run: pnpm build
+
+  auth0-action:
+    needs: changes
+    if: needs.changes.outputs.auth0 == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - run: node --test infra/auth0/actions/*.test.mjs
+
+  infra-fmt:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+      - run: tofu fmt -check -recursive infra

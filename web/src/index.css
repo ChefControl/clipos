@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+/* Fonts are bundled (decision 40): no third-party font host for the CSP to allow. Latin
+   only; anything else (e.g. Hebrew titles) falls back to the system font. */
+@import "@fontsource/saira-semi-condensed/latin-400.css";
+@import "@fontsource/saira-semi-condensed/latin-500.css";
+@import "@fontsource/saira-semi-condensed/latin-600.css";
+@import "@fontsource/saira-semi-condensed/latin-700.css";
+@import "@fontsource/saira-semi-condensed/latin-800.css";
+@import "@fontsource/martian-mono/latin-400.css";
+@import "@fontsource/martian-mono/latin-500.css";
+
+/* "The show" palette (docs/PLAN.md, redesign). Amber is you, the host and the primary
+   action; violet is fails; red is deleting and your kills; green is "in sync". White text
+   sits on the darker `danger-strong` (5.3:1; `danger` is 3.9:1). */
+@theme {
+  --color-bg: #050506;
+  --color-surface: #16171a;
+  --color-surface-2: #222327;
+  --color-border: rgb(255 255 255 / 0.08);
+  --color-text: #eceae4;
+  --color-soft: #c9c6be;
+  --color-muted: #8f8c84;
+  --color-accent: #f5a524;
+  --color-accent-strong: #ffc65c;
+  --color-on-accent: #2a1a06;
+  --color-violet: #a48bff;
+  --color-danger: #e5484d;
+  --color-danger-strong: #c4363b;
+  --color-green: #4cc38a;
+  --font-sans: "Saira Semi Condensed", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Martian Mono", ui-monospace, "SF Mono", monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-bg text-text font-sans antialiased;
+}
+
+@layer base {
+  /* Keyboard focus in the app's amber, not the browser's blue. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .input {
+    @apply rounded-xl border border-border bg-surface px-3 py-2 text-base focus:border-accent focus:outline-none disabled:opacity-60;
+  }
+}
+
+/* A frosted panel: the redesign's one surface for things that sit over the page. */
+@utility glass {
+  background: rgb(28 29 33 / 0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgb(255 255 255 / 0.07);
+}
+
+/* A lighter frost for small chips over video or posters. */
+@utility frost {
+  background: rgb(20 21 24 / 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Apple-style continuous corners where the browser has them; plain radii elsewhere.
+   Things are squircles, people are circles. */
+@utility squircle {
+  @supports (corner-shape: squircle) {
+    corner-shape: squircle;
+  }
+}
+
+/* Text over video or posters. */
+@utility text-shadow {
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.7);
+}

@@ -1,0 +1,65 @@
+name: Gate
+
+# CD's first step (deploy.yml, infra.yml): ships a commit on main only if it's a pull
+# request merge whose gates tested exactly this code. That means the branch already held
+# the previous main when it merged (so the merge changes nothing the PR's CI didn't see),
+# and CI passed on the branch's last commit. Anything else (a stale branch, a direct push,
+# CI that failed or never ran) stops here; a deploy or apply can still be run by hand.
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: An up-to-date pull request merge whose CI passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$GITHUB_SHA
+          if [ "$(git rev-list --parents -n 1 "$sha" | wc -w)" -ne 3 ]; then
+            echo "::error::$sha isn't a pull request merge, so no gates ran on it. Open a PR, or run the workflow by hand."
+            exit 1
+          fi
+          base=$(git rev-parse "$sha^1")
+          head=$(git rev-parse "$sha^2")
+          if ! git merge-base --is-ancestor "$base" "$head" \
+            || [ "$(git rev-parse "$sha^{tree}")" != "$(git rev-parse "$head^{tree}")" ]; then
+            echo "::error::The branch ($head) was behind main ($base) when it merged, so its gates didn't test this code. Update the branch and let CI pass before merging."
+            exit 1
+          fi
+          # The pull request this merged, so the CI run below is that branch's, in this repo:
+          # anyone can open a pull request from a fork at the same commit, and its run
+          # (pending approval, cancelled or failed) mustn't stand in for ours.
+          export SHA=$sha
+          read -r pr branch from < <(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/pulls" \
+            --jq '[.[] | select(.merge_commit_sha == env.SHA)][0] // {}
+              | "\(.number // "none") \(.head.ref // "-") \(.head.repo.full_name // "-")"')
+          if [ "${pr:-none}" = none ]; then
+            echo "::error::$sha isn't the merge of a pull request, so no gates ran on it. Open a PR, or run the workflow by hand."
+            exit 1
+          fi
+          if [ "$from" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::#$pr came from a fork ($from). Check it, then run the workflow by hand."
+            exit 1
+          fi
+          read -r status conclusion url < <(gh api -X GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f head_sha="$head" -f event=pull_request -f branch="$branch" -F per_page=100 \
+            --jq '[.workflow_runs[] | select(.head_repository.full_name == env.GITHUB_REPOSITORY)][0] // {}
+              | "\(.status // "none") \(.conclusion // "none") \(.html_url // "-")"')
+          if [ "$status" != completed ] || [ "$conclusion" != success ]; then
+            echo "::error::CI on #$pr's last commit ($head) is $status/$conclusion ($url). Its gates have to pass first."
+            exit 1
+          fi
+          echo "$sha merges #$pr ($head), up to date with main, and CI passed there: $url"

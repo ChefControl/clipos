@@ -1,0 +1,19 @@
+[package]
+name = "clipos-killfeed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+image = { version = "0.25.10", default-features = false }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "api-27", "load-dynamic"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
