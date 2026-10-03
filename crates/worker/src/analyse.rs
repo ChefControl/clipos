@@ -136,11 +136,12 @@ pub async fn run(worker: &Worker, payload: &Value) -> Result<(), JobError> {
 }
 
 /// How long reading a clip's killfeed may take before ffmpeg is stopped: well over what a
-/// clip of `length` needs on the shared plan (decoding is about real time, the models
-/// a few frames a second), so only a stuck ffmpeg (a stalled read, a pathological file)
-/// hits it.
+/// clip of `length` needs on the shared plan, so only a stuck ffmpeg (a stalled read, a
+/// pathological file) hits it. In production the models take about 3.5 s a frame at one
+/// frame a second, so a clip needs about 3.5 times its length: a 180 s clip took 634 s
+/// against the old 120 s + 3x limit of 660 s, and a busier one timed out.
 pub(crate) fn time_limit(length: Duration) -> Duration {
-    Duration::from_secs(120) + length * 3
+    Duration::from_secs(120) + length * 6
 }
 
 /// The video to sample: a local path or a read SAS, and the stream to read.

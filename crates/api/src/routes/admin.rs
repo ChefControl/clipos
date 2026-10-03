@@ -215,8 +215,14 @@ pub async fn analyse_clip(
     }
     // Two admins at once could still queue it twice, which only reads the clip twice.
     if !analysis::pending(&state.pool, id).await? {
-        // At normal priority: someone is waiting on it.
-        jobs::enqueue(&state.pool, clips::ANALYSE_JOB, json!({ "clipId": id })).await?;
+        // Like the transcode's: the clip already plays, so uploads still go first.
+        jobs::enqueue_with_priority(
+            &state.pool,
+            clips::ANALYSE_JOB,
+            json!({ "clipId": id }),
+            jobs::PRIORITY_LOW,
+        )
+        .await?;
         tracing::info!(admin = %admin.handle, clip_id = %id, "re-analysis queued");
     }
     Ok((StatusCode::ACCEPTED, Json(AnalysisQueued { pending: true })))

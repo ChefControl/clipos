@@ -10,6 +10,7 @@ use clipos_core::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use uuid::Uuid;
 
@@ -34,6 +35,12 @@ pub struct Worker {
     /// requeues jobs whose worker stopped, never a long one still going. Well under
     /// `STALE_JOB_SECS`.
     pub heartbeat: Duration,
+    /// Cancelled when the worker is asked to stop (SIGTERM on a deploy or restart).
+    pub shutdown: CancellationToken,
+    /// How long a running job may still take once `shutdown` is cancelled. A job that
+    /// isn't done by then is handed back to the queue (`jobs::release`) for the next
+    /// worker, rather than killed with the container and left for the reaper.
+    pub shutdown_grace: Duration,
 }
 
 /// Why a job failed, which decides whether it's retried.
@@ -72,6 +79,17 @@ impl Worker {
         let outcome = tokio::select! {
             outcome = self.handle(&job) => outcome,
             never = self.keep_locked(&job) => match never {},
+            () = self.out_of_time() => {
+                // Dropping `handle` stops the job (ffmpeg is killed with it); it starts
+                // over from scratch on the next worker, as every job can.
+                if jobs::release(&self.pool, &job, &self.id).await? {
+                    tracing::warn!(
+                        elapsed_ms = elapsed_ms(),
+                        "stopping before the job finished; handed it back to the queue"
+                    );
+                }
+                return Ok(());
+            }
         };
         let (error, permanent) = match outcome {
             Ok(()) => {
@@ -106,6 +124,13 @@ impl Worker {
             self.on_gave_up(&job, &message).await?;
         }
         Ok(())
+    }
+
+    /// Resolves `shutdown_grace` after `shutdown` is cancelled: when a running job has had
+    /// its chance to finish.
+    async fn out_of_time(&self) {
+        self.shutdown.cancelled().await;
+        tokio::time::sleep(self.shutdown_grace).await;
     }
 
     /// Refreshes the running `job`'s lock every `heartbeat`, until dropped; never returns.
@@ -159,6 +184,9 @@ impl Worker {
             clips::DELETE_BLOBS_JOB => self.delete_blobs(&job.payload).await,
             // Smoke-test job used to verify the pipeline end to end.
             "noop" => Ok(()),
+            // A job that never finishes, for the shutdown tests.
+            #[cfg(test)]
+            "hang" => std::future::pending().await,
             other => Err(anyhow::anyhow!("no handler for job kind {other:?}").into()),
         }
     }

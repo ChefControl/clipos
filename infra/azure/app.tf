@@ -36,6 +36,11 @@ locals {
         # Both B2 cores; ffmpeg runs under `nice`, so the api still gets the CPU first.
         # First Azure run (P1v3) with 1 thread: 30 s 1080p60 clip in 70 s (0.43x real time).
         FFMPEG_THREADS = "2"
+        # On a deploy or restart, App Service waits this long after SIGTERM before it kills
+        # the container (default 5 s, 120 s at most). The worker gives a running job 90 s
+        # (SHUTDOWN_GRACE_SECS) and then hands it back to the queue, so the kill comes
+        # after the handback instead of in the middle of the job.
+        WEBSITES_CONTAINER_STOP_TIME_LIMIT = "120"
       }
     }
   }

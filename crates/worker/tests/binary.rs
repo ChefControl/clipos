@@ -150,7 +150,7 @@ async fn the_binary_runs_jobs_and_stops_on_sigterm(pool: PgPool) {
     assert_eq!(started["worker_id"], "instance-1");
     for m in [
         "job succeeded",
-        "shutdown requested; finishing current job",
+        "shutdown requested; giving the current job its grace period",
         "worker stopped",
     ] {
         assert!(
