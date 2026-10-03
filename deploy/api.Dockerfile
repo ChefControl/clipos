@@ -29,7 +29,9 @@ FROM scratch AS bin
 COPY --from=build /usr/local/bin/clipos-api /clipos-api
 
 FROM debian:trixie-slim
+# Upgrade too: the base image lags trixie-security (Trivy, audit.yml).
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home clipos
