@@ -1,0 +1,14 @@
+# The actions this repo may run, a copy of Settings → Actions → General → "Allow
+# ChefControl, and select non-ChefControl, actions and reusable workflows". Keep the two in
+# step: check-actions.sh tests every action the workflows use, and every action those
+# actions use in turn, against this list, so one that's missing fails CI rather than a
+# deploy. GitHub's own actions (actions/*, github/*) are always allowed, and every
+# reference has to be a full commit SHA.
+EmbarkStudios/*
+actions-rust-lang/*
+azure/*
+docker/*
+opentofu/*
+pnpm/*
+taiki-e/*
+Swatinem/rust-cache@*
