@@ -28,6 +28,7 @@ jobs:
       auth0: ${{ steps.diff.outputs.auth0 }}
       infra: ${{ steps.diff.outputs.infra }}
       playwright: ${{ steps.diff.outputs.playwright }}
+      actions: ${{ steps.diff.outputs.actions }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,6 +56,7 @@ jobs:
             echo "web=$(touched '^web/')"
             echo "auth0=$(touched '^infra/auth0/actions/')"
             echo "infra=$(touched '^infra/')"
+            echo "actions=$(touched '^\.github/')"
             echo "playwright=$(grep -m1 -oE "'@playwright/test@[0-9]+\.[0-9]+\.[0-9]+'" web/pnpm-lock.yaml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
           } >> "$GITHUB_OUTPUT"
 
@@ -282,3 +284,20 @@ jobs:
           tofu_version: 1.12.5
           tofu_wrapper: false
       - run: tofu fmt -check -recursive infra
+
+  # Every action the workflows use, and the actions those use in turn, is on the repo's
+  # allowlist (.github/allowed-actions.txt) and pinned to a commit SHA. Otherwise a job that
+  # this PR skips, like the deploy's build, would fail only after the merge.
+  actions-allowlist:
+    needs: changes
+    if: needs.changes.outputs.actions == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: .github/check-actions.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
