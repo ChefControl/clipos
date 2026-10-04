@@ -67,8 +67,12 @@ data "azurerm_resources" "web_apps" {
   required_tags       = { app = "clipos" }
 }
 
+# Grafana (grafana.tf) never connects to Postgres, so its IPs aren't let in.
 data "azurerm_linux_web_app" "deployed" {
-  for_each = toset([for r in data.azurerm_resources.web_apps.resources : r.name])
+  for_each = toset([
+    for r in data.azurerm_resources.web_apps.resources : r.name
+    if lookup(r.tags, "component", "") != "grafana"
+  ])
 
   name                = each.key
   resource_group_name = local.rg
@@ -123,6 +127,16 @@ resource "azurerm_postgresql_flexible_server_configuration" "connection_throttle
   value     = "on"
 
   depends_on = [azurerm_postgresql_flexible_server_configuration.log_disconnections]
+}
+
+# Azure's "enhanced metrics" for database activity (commits, rollbacks, deadlocks, tuples),
+# which Grafana's Postgres panels show. Platform metrics, so free; applies without a restart.
+resource "azurerm_postgresql_flexible_server_configuration" "metrics_database_activity" {
+  name      = "metrics.collector_database_activity"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = "on"
+
+  depends_on = [azurerm_postgresql_flexible_server_configuration.connection_throttle]
 }
 
 # Mails ADMIN_EMAILS when logins keep failing (someone probing the server, or an app

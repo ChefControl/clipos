@@ -1,0 +1,13 @@
+# Signs in as the web app's managed identity, which has Monitoring Reader on rg-clipos
+# (metrics, and queries on the Log Analytics workspace). No secret to rotate.
+apiVersion: 1
+datasources:
+  - name: Azure Monitor
+    uid: azure-monitor
+    type: grafana-azure-monitor-datasource
+    access: proxy
+    isDefault: true
+    editable: false
+    jsonData:
+      azureAuthType: msi
+      subscriptionId: ${AZURE_SUBSCRIPTION_ID}

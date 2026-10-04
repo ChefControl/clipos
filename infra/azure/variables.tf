@@ -94,3 +94,15 @@ variable "monthly_budget" {
   type        = number
   default     = 75
 }
+
+variable "job_failures_alert_threshold" {
+  description = "Failed job attempts in an hour (retries included) at which ADMIN_EMAILS get an alert. A job that gives up alerts on its own."
+  type        = number
+  default     = 3
+}
+
+variable "http_5xx_alert_threshold" {
+  description = "Server errors (5xx) from the api in 15 minutes at which ADMIN_EMAILS get an alert."
+  type        = number
+  default     = 5
+}

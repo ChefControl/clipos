@@ -12,7 +12,8 @@
     "test": "vitest run",
     "gen:api": "openapi-typescript openapi.json -o src/api/schema.d.ts",
     "e2e": "playwright test",
-    "coverage": "rm -rf .nyc_output coverage && vitest run --coverage && COVERAGE=1 playwright test && node e2e/remap-coverage.mjs .nyc_output coverage/merged/e2e.json && cp coverage/unit/coverage-final.json coverage/merged/unit.json && nyc report --temp-dir coverage/merged --report-dir coverage --reporter text-summary --reporter html --reporter json-summary --check-coverage --lines 95"
+    "coverage": "rm -rf .nyc_output coverage && vitest run --coverage && COVERAGE=1 playwright test && node e2e/remap-coverage.mjs .nyc_output coverage/merged/e2e.json && cp coverage/unit/coverage-final.json coverage/merged/unit.json && pnpm coverage:report",
+    "coverage:report": "nyc report --temp-dir coverage/merged --report-dir coverage --reporter text-summary --reporter html --reporter json-summary --check-coverage --lines 95"
   },
   "dependencies": {
     "@auth0/auth0-react": "^2.27.0",
