@@ -317,6 +317,10 @@ jobs:
           pattern: coverage-*
           path: web/coverage/merged
           merge-multiple: true
+      # The browser jobs ran in Playwright's container, whose checkout is /__w/<repo>/<repo>:
+      # name the files as this runner does, or the two halves count as different files.
+      - name: Same file paths for the unit and browser coverage
+        run: sed -i "s#\"/__w/[^/\"]*/[^/\"]*/#\"$GITHUB_WORKSPACE/#g" coverage/merged/e2e-*.json
       - name: Coverage floor
         run: pnpm coverage:report
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

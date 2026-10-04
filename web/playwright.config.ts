@@ -15,6 +15,9 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   // Playwright's default is half the cores, which was one worker on CI's runners.
   workers: process.env.CI ? "100%" : undefined,
+  // With a worker on every core, WebKit can take over the default 5 s to render a clip
+  // page from the instrumented build; the checks are the same, they only wait longer.
+  expect: { timeout: process.env.CI ? 10_000 : 5_000 },
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     baseURL: `http://127.0.0.1:${port}`,
