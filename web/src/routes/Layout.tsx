@@ -49,8 +49,9 @@ export function Layout() {
             </span>
           </Link>
           <nav className="glass flex min-w-0 gap-1 rounded-full p-1">
-            {/* Tonight (the show's lobby) joins the bar in S6, admins first. Admin is under
-                your profile's Account panel. */}
+            {/* Tonight, the show's lobby, once the show is open to you (admins first,
+                decision 40). Admin is under your profile's Account panel. */}
+            {me.data?.shows && <NavLink to="/tonight">Tonight</NavLink>}
             <NavLink to="/">Archive</NavLink>
             <NavLink to="/upload">Upload</NavLink>
           </nav>
@@ -107,7 +108,7 @@ function MeError({ error, retry }: { error: Error; retry: () => void }) {
   );
 }
 
-function NavLink({ to, children }: { to: "/" | "/upload"; children: string }) {
+function NavLink({ to, children }: { to: "/" | "/tonight" | "/upload"; children: string }) {
   return (
     <Link
       to={to}

@@ -473,7 +473,7 @@ Order: S1 → S2 → S4 → S3 → S5 → S6 → S7, then S8 and S9 (S9's show p
 - [x] Tests: hub tests driving two websocket clients (a show, hello and token checks, a restart resuming the saved state); engine unit tests (fake clock and player); desktop Playwright with two browser contexts and a stand-in hub (its clock 5 s off): start together, a 3 s jump pulled back, a dropped connection reconnecting in step.
 
 **S6 — Show night screens** (group 2)
-- [ ] Lobby `/tonight` (2.1): lineup with reorder and drop, Start, copy the join link, trophy shelf, past shows; empty state.
+- [x] Lobby `/tonight` (2.1, `web/src/routes/Tonight.tsx`), Tonight in the top bar once the show is open to you. With no show on: tonight's clips and "Host tonight's show", which opens the lobby (the mocks have no such step: the join link needs a show). Your lobby: drag a clip (or the arrow keys on its handle) to reorder, drop it (it waits under the lineup with "Put back"), copy the join link (`/shows/{id}`), Start (straight to the show), who's in the lobby. The host's lobby joins the live room, so a lobby its host leaves ends by itself like any show. Someone else's show: Join. Trophy shelf (the last winners) and past shows from `GET /api/shows`. Empty: "Upload a clip" and the last show's clip of the night; its replay joins in S7.
 - [ ] Joining (1.3), host's and friend's screens (2.2, 2.3) with the collapsible side panel, the reaction dock with 🍌 and Kip's "Fail? 🍌" hint, floating reactions, replay toasts.
 - [ ] Up next countdown with Hold / Start now and readiness (2.4); Catching up and Host dropped out (2.8); End the show.
 - [ ] "● Live · Join" pill on every page; "Open this on a PC" page for phones.
