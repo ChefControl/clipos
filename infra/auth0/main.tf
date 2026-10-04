@@ -144,6 +144,38 @@ resource "auth0_connection_client" "google" {
 }
 
 # ---------------------------------------------------------------------------
+# Grafana (infra/azure/grafana.tf): a regular web app, so it has a client secret, which
+# the azure stack reads from this stack's state and keeps in Key Vault. Grafana only lets
+# ADMIN_EMAILS in; the post-login Action keeps it Google-only with a verified email.
+# ---------------------------------------------------------------------------
+
+resource "auth0_client" "grafana" {
+  name                = "clipos-grafana"
+  description         = "clipos Grafana (monitoring, admins only)"
+  app_type            = "regular_web"
+  is_first_party      = true
+  oidc_conformant     = true
+  grant_types         = ["authorization_code"]
+  callbacks           = ["${var.grafana_origin}/login/generic_oauth"]
+  allowed_logout_urls = ["${var.grafana_origin}/login"]
+  web_origins         = []
+
+  jwt_configuration {
+    alg = "RS256"
+  }
+}
+
+resource "auth0_client_credentials" "grafana" {
+  client_id             = auth0_client.grafana.client_id
+  authentication_method = "client_secret_post"
+}
+
+resource "auth0_connection_client" "grafana_google" {
+  connection_id = auth0_connection.google.id
+  client_id     = auth0_client.grafana.client_id
+}
+
+# ---------------------------------------------------------------------------
 # Post-login Action: Google-only, verified email, adds the claims the API reads.
 # ---------------------------------------------------------------------------
 
@@ -160,7 +192,7 @@ resource "auth0_action" "post_login" {
 
   secrets {
     name  = "CLIENT_IDS"
-    value = join(",", [for app in auth0_client.spa : app.client_id])
+    value = join(",", concat([for app in auth0_client.spa : app.client_id], [auth0_client.grafana.client_id]))
   }
 
   # Production logins are checked against the invite allowlist. Dev logins can't be:

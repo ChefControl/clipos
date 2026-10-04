@@ -150,7 +150,7 @@ async function startPlaying(page: Page) {
   // Autoplay with sound may need a click, like a real first visit. Wait until it either
   // plays in step or asks: right after Play it's still starting, and neither shows yet.
   // Closing the last few hundred ms is gentle (3 % faster), so it can take a while on a
-  // busy machine.
+  // busy machine, and CI runs one worker per core.
   const join = page.getByRole("button", { name: "Join with sound" });
   const status = page.getByTestId("sync-status");
   await expect
@@ -158,7 +158,7 @@ async function startPlaying(page: Page) {
       async () =>
         (await join.isVisible()) ||
         ((await status.textContent()) === "Synced" && !(await videoState(page)).paused),
-      { timeout: 15_000 },
+      { timeout: 30_000 },
     )
     .toBe(true);
   if (await join.isVisible()) await join.click();

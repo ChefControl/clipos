@@ -44,10 +44,11 @@ jobs:
       # Reads the lockfile; nothing needs installing.
       - run: pnpm audit --audit-level high
 
-  # The Debian packages (ffmpeg among them) in the runtime stages of both Dockerfiles,
-  # built here with stand-in binaries, since the Rust and web dependencies are the jobs
-  # above. Fails on a HIGH or CRITICAL vulnerability that has a fix. Built from the
-  # public base images, so no registry login and nothing pushed.
+  # The Debian packages (ffmpeg among them) in the runtime stages of the api and worker
+  # Dockerfiles, built here with stand-in binaries, since the Rust and web dependencies are
+  # the jobs above; and the Grafana image, Alpine packages and Go binaries alike. Fails on
+  # a HIGH or CRITICAL vulnerability that has a fix. Built from the public base images, so
+  # no registry login and nothing pushed.
   image-scan:
     runs-on: ubuntu-latest
     permissions:
@@ -67,13 +68,15 @@ jobs:
             --build-context bin=/tmp/stub/api --build-context spa=/tmp/stub/spa .
           docker build -t clipos-worker:scan -f deploy/worker.Dockerfile \
             --build-context bin=/tmp/stub/worker .
+          docker build -t clipos-grafana:scan -f deploy/grafana.Dockerfile .
           docker save -o /tmp/scan/clipos-api.tar clipos-api:scan
           docker save -o /tmp/scan/clipos-worker.tar clipos-worker:scan
+          docker save -o /tmp/scan/clipos-grafana.tar clipos-grafana:scan
       # Trivy reads the saved images, so it needs no access to Docker itself.
       - name: Scan them
         run: |
           status=0
-          for image in clipos-api clipos-worker; do
+          for image in clipos-api clipos-worker clipos-grafana; do
             docker run --rm -v /tmp/scan:/scan:ro -v /tmp/trivy:/root/.cache/trivy "$TRIVY_IMAGE" \
               image --input "/scan/${image}.tar" --scanners vuln --severity HIGH,CRITICAL \
               --ignore-unfixed --exit-code 1 --no-progress || status=1

@@ -4,6 +4,12 @@ variable "prod_origin" {
   default     = "https://clips.spawnpoint.run"
 }
 
+variable "grafana_origin" {
+  description = "Public origin of Grafana (infra/azure/grafana.tf)."
+  type        = string
+  default     = "https://grafana.clips.spawnpoint.run"
+}
+
 variable "dev_origin" {
   description = "Origin of the local Vite dev server."
   type        = string
