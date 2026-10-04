@@ -180,17 +180,18 @@ All in resource group `rg-clipos`, region `israelcentral`.
 | App Service plan | Linux **B2** (2 cores, 3.5 GB); P1v3 until the 2026-10-03 cost audit (decision 45) |
 | Web App `clipos-api` | custom container from ACR, system-assigned MI, Always On, health check `/healthz`, custom domain `clips.spawnpoint.run` + **free App Service managed certificate** |
 | Web App `clipos-worker` | custom container, system-assigned MI, **Always On**, health check `/healthz`. The worker must listen on HTTP (`WEBSITES_PORT`), because App Service treats a container that doesn't answer on its port as failed. Both apps' Kudu (SCM) sites deny everyone but `scm_allowed_ips` (default none): deploys go through ARM and logs to Log Analytics |
+| Web App `clipos-grafana` | Grafana OSS (`deploy/grafana.Dockerfile`) on the same plan, ~150 MB; `grafana.clips.spawnpoint.run` with its own managed certificate. Dashboards over Azure Monitor (platform metrics + Log Analytics) through its managed identity (`Monitoring Reader` on `rg-clipos`); sign-in through Auth0, `ADMIN_EMAILS` only (decision 47). Its own logs stay out of Log Analytics |
 | Postgres Flexible Server | Burstable **B1ms**, 32 GB auto-grow, PG 17, 7-day PITR, no HA, custom maintenance window (Sun 04:00 IL). **Entra-only auth** (password auth off). Public endpoint with **firewall = App Service outbound IPs only** (from `possible_outbound_ip_address_list`), no "allow Azure services" rule; an admin IP rule is added only while needed. Those IPs are shared with other apps on the stamp, so connection throttling is on |
 | Storage account | StorageV2, LRS, private containers, lifecycle policy, soft delete, CORS |
 | Key Vault | RBAC mode; secrets: Auth0 Action shared secret (phase 3). No database password: Postgres is Entra-only |
 | ACR | Basic; `AcrPull` for both web apps' MIs |
 | DNS zone | `clips.spawnpoint.run` — A record + `asuid` TXT for App Service domain verification |
 | Log Analytics + diagnostic settings | App Service console logs, Postgres logs (connection lines on, since only they carry a failed login's client address; disconnection lines off); 30-day retention, 0.1 GB daily cap |
-| Action group + alerts | `ag-clipos-admins` mails `ADMIN_EMAILS`. `clipos-postgres-failed-connections`: more than 10 failed Postgres logins in 15 minutes (a platform metric, so it still fires when the Log Analytics cap pauses ingestion). Still to add (phase 7): worker job failures, 5xx rate, Postgres CPU/storage |
+| Action group + alerts | `ag-clipos-admins` mails `ADMIN_EMAILS`. `clipos-postgres-failed-connections`: more than 10 failed Postgres logins in 15 minutes (a platform metric, so it still fires when the Log Analytics cap pauses ingestion). Still to add (phase 7): worker job failures, 5xx rate, Postgres CPU/storage. Dashboards: Grafana (above) |
 | Budget | `clipos-monthly` on `rg-clipos`, $75: mails at 80% and 100% actual and 100% forecast |
 | ACR task | `purge-old-tags`, weekly: keeps the last 10 tags per image |
 
-**Role assignments:** `api` MI → `Storage Blob Delegator` (account) + `Storage Blob Data Reader` (playback/posters) + `Storage Blob Data Contributor` (originals, for deletes) + `Key Vault Secrets User`; `worker` MI → `Storage Blob Delegator` (account, to sign read SAS for ffmpeg) + `Storage Blob Data Contributor` (originals/playback/posters) + `Storage Blob Data Reader` (models, so it can't overwrite them), and no Key Vault role, since it reads no secret; both → `AcrPull`, Postgres Entra role.
+**Role assignments:** `api` MI → `Storage Blob Delegator` (account) + `Storage Blob Data Reader` (playback/posters) + `Storage Blob Data Contributor` (originals, for deletes) + `Key Vault Secrets User`; `worker` MI → `Storage Blob Delegator` (account, to sign read SAS for ffmpeg) + `Storage Blob Data Contributor` (originals/playback/posters) + `Storage Blob Data Reader` (models, so it can't overwrite them), and no Key Vault role, since it reads no secret; both → `AcrPull`, Postgres Entra role; `grafana` MI → `Monitoring Reader` (resource group) + `Key Vault Secrets User` (its Auth0 client secret) + `AcrPull`, and no Postgres role.
 
 **State:** `infra/bootstrap` creates `rg-clipos-tfstate` + storage account with blob versioning; applied locally once. Other stacks use the `azurerm` backend with `use_azuread_auth = true`.
 
@@ -200,6 +201,7 @@ All in resource group `rg-clipos`, region `israelcentral`.
 - **One Google connection**, using your own GCP OAuth client and enabled for both SPAs. Database and passwordless connections are disabled.
 - **The Post-Login Action and its secret.** The Action treats a login as prod when it comes through the prod app or asks for the prod audience.
 - **Refresh-token rotation** on both SPAs.
+- **`clipos-grafana`**, a regular web app for Grafana (callback `https://grafana.clips.spawnpoint.run/login/generic_oauth`, Google only). Its client secret goes from this stack's state to Key Vault through the azure stack.
 
 Because both apps share the tenant, they share user records too. The Auth0 stack is applied from CI only, through the manually triggered infra workflow.
 
@@ -374,7 +376,8 @@ Rules over it: side = the emblem's majority; won/lost = the banner; clutch = ali
 - [ ] Retire `killfeed-rows` once the locator matches it on the killfeed eval.
 
 ### Phase 7 — Hardening & launch
-- [ ] Alerts, log queries, Postgres restore drill (PITR to a scratch server), blob soft-delete restore drill.
+- [x] Dashboards: Grafana at `grafana.clips.spawnpoint.run` (decision 47) with five dashboards (overview, api, worker, infrastructure, logs), all from data already collected.
+- [ ] Alerts, Postgres restore drill (PITR to a scratch server), blob soft-delete restore drill.
 - [ ] Security pass: SAS scopes/expiry, CORS, internal endpoint secret. (Headers — CSP, HSTS, nosniff, referrer and permissions policies — and the dependency audits, `cargo deny` and `pnpm audit`, were done in S1.)
 - [ ] Invite everyone. 🎉
 - [ ] **Old infrastructure teardown:** finish removing an earlier project's leftovers by hand (the checklist is kept outside this repo).
@@ -571,3 +574,4 @@ The canvas's phone boards: the show pad with the reaction sheet (2.3), hosting f
 | 44 | **A disabled host stays host** (considered 2026-10-03, kept): disabling the host doesn't hand the show over; "Take over as host" once the host has been away is the only way out | The live room already closes a disabled user's connection, so the host goes away and the takeover timer starts; a second way would only add cases |
 | 45 | **App Service plan B2, not P1v3** (cost audit 2026-10-03): the plan averaged 3–6% CPU, the api peaked at 111 MB and the worker at 1.3 GB, so P1v3 was ~4× too big for 78% of the bill. B3 (same compute as P1v3, 7 GB) is the fallback if memory stays above 85% or jobs get too slow. A scale-to-zero worker waits for Container Apps in Israel Central: ACI works today but its changing outbound IPs need a Postgres private endpoint, which leaves only ~$4 a month on top of B2 | Saves ~$80 of ~$140 a month with a one-line change; jobs may take up to ~2× longer, and uploads default to waiting for the show anyway |
 | 46 | **One HUD analyzer, not a detector per feature** (decided 2026-10-04): a locator model for all 18 HUD elements plus readers (OCR, icons, emblem shapes), writing a per-second HUD timeline that features are rules over; the side-detection PR was closed in favour of it | Separate detectors would each add model time per frame and hardcode positions that HUD settings move; one locator finds every element wherever it is, and one model is one thing to label, train, gate and release |
+| 47 | **Self-hosted Grafana on the B2 plan for dashboards** (decided 2026-10-04): Grafana OSS as a third container next to the api and the worker, reading Azure Monitor through its managed identity; dashboards and config baked into the image; Auth0 sign-in for `ADMIN_EMAILS` only. Rejected: Azure Managed Grafana (Standard ≈ $60+ a month, about the whole current bill) and Grafana Cloud's free tier (needs a service principal secret stored outside Azure) | Costs nothing extra and keeps no secret for Azure access; the dashboards are reviewed like code. Everything they show is data that was already collected (App Service and Postgres metrics, the apps' JSON logs), so the apps didn't change |

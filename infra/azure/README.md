@@ -6,6 +6,7 @@ The app itself, everything inside `rg-clipos` (created empty by `infra/bootstrap
 |---|---|
 | `asp-clipos` | Linux App Service plan, B2 |
 | `clipos-api-<suffix>`, `clipos-worker-<suffix>` | Web apps running one container each, with system-assigned identities. The image tag is ignored here; `deploy.yml` rolls it out. Their Kudu (SCM) sites deny everyone except `scm_allowed_ips` |
+| `clipos-grafana-<suffix>` | Grafana on the same plan (`grafana.tf`): dashboards over this resource group's metrics and logs, at `grafana.clips.spawnpoint.run`. See [Grafana](#grafana) |
 | `psql-clipos-<suffix>` | Postgres 17 Flexible Server, B1ms. Entra-only login; firewall = the web apps' outbound IPs; connection throttling on. Alert `clipos-postgres-failed-connections` mails `ADMIN_EMAILS` when logins keep failing |
 | `stclipos<suffix>` | Media storage (`originals`, `playback`, `posters`, `models`); shared keys off; CORS for the app's origin only. The worker's roles are per container and only read `models` |
 | `crclipos<suffix>` | Container registry (Basic); the web apps pull with `AcrPull` |
@@ -39,6 +40,15 @@ Once `dig NS clips.spawnpoint.run +short` returns them, an apply with `custom_do
 
   For a local `tofu plan`, export the same JSON as `TF_VAR_admin_user`.
 - `invite-check-secret` in Key Vault is the shared secret between the Auth0 post-login Action and `POST /internal/invites/check`. The api reads it through a Key Vault reference; `infra/auth0` reads the `invite_check_secret` output, so apply this stack before that one.
+
+## Grafana
+
+`https://grafana.clips.spawnpoint.run` (the `grafana_url` output). Sign in with Google; only `ADMIN_EMAILS` get in, as Grafana admins. Five dashboards in the `clipos` folder: **overview** (the home page), **api**, **worker**, **infrastructure** and **logs**.
+
+- **Data:** one data source, Azure Monitor, signed in as the web app's managed identity (`Monitoring Reader` on `rg-clipos`). Metrics are Azure's platform metrics; everything else is KQL over `log-clipos` (the apps' JSON console logs, App Service HTTP and platform logs, Postgres logs). When the workspace hits its 100 MB daily cap, the log panels stop at that point until 00:00 UTC (the overview's "Logs today" shows how close it is); the metric panels keep going.
+- **Changing a dashboard:** they're files in the image (`deploy/grafana/dashboards/`). Edit in the UI to try something, then **Export → Export as JSON**, replace the file and open a pull request; the UI can't save over a provisioned dashboard, and a restart drops UI-only changes.
+- **Sign-in:** Auth0 client `clipos-grafana` (infra/auth0). Its secret goes from the auth0 stack's state to Key Vault (`grafana-oauth-client-secret`) through this stack, which reads that state, so the azure apply after an auth0 change picks it up. There's no local admin account and no password login.
+- **First rollout:** `infra/bootstrap` must allow `Monitoring Reader` (a local bootstrap apply) before the azure apply that creates the app. On the merge, Infra applies azure (creates the app, sign-in off: there's no Auth0 client yet), then auth0 (creates the client). Then **Infra → Run workflow → azure** turns sign-in on, and **Deploy → Run workflow** rolls out the image if the deploy ran before the app existed.
 
 ## Database access
 

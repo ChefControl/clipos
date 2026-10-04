@@ -1,0 +1,1747 @@
+{
+  "uid": "clipos-overview",
+  "title": "clipos overview",
+  "description": "Is clipos up, busy or failing: health, traffic, jobs, resources and the latest problems.",
+  "tags": [
+    "clipos"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "5m",
+  "schemaVersion": 41,
+  "version": 1,
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": [
+      "1m",
+      "5m",
+      "15m",
+      "1h"
+    ]
+  },
+  "links": [
+    {
+      "title": "clipos",
+      "type": "dashboards",
+      "tags": [
+        "clipos"
+      ],
+      "asDropdown": false,
+      "includeVars": false,
+      "keepTime": true,
+      "icon": "external link"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "sub",
+        "label": "Subscription",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-azure-monitor-datasource",
+          "uid": "azure-monitor"
+        },
+        "query": {
+          "refId": "A",
+          "queryType": "Azure Subscriptions"
+        },
+        "regex": "",
+        "hide": 2,
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": {},
+        "options": [],
+        "sort": 0
+      },
+      {
+        "name": "api",
+        "label": "api",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-azure-monitor-datasource",
+          "uid": "azure-monitor"
+        },
+        "query": {
+          "refId": "A",
+          "queryType": "Azure Resource Names",
+          "subscription": "$sub",
+          "resourceGroup": "rg-clipos",
+          "namespace": "microsoft.web/sites"
+        },
+        "regex": "/^clipos-api-/",
+        "hide": 2,
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": {},
+        "options": [],
+        "sort": 0
+      },
+      {
+        "name": "worker",
+        "label": "worker",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-azure-monitor-datasource",
+          "uid": "azure-monitor"
+        },
+        "query": {
+          "refId": "A",
+          "queryType": "Azure Resource Names",
+          "subscription": "$sub",
+          "resourceGroup": "rg-clipos",
+          "namespace": "microsoft.web/sites"
+        },
+        "regex": "/^clipos-worker-/",
+        "hide": 2,
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": {},
+        "options": [],
+        "sort": 0
+      },
+      {
+        "name": "plan",
+        "label": "plan",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-azure-monitor-datasource",
+          "uid": "azure-monitor"
+        },
+        "query": {
+          "refId": "A",
+          "queryType": "Azure Resource Names",
+          "subscription": "$sub",
+          "resourceGroup": "rg-clipos",
+          "namespace": "microsoft.web/serverfarms"
+        },
+        "regex": "",
+        "hide": 2,
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": {},
+        "options": [],
+        "sort": 0
+      },
+      {
+        "name": "pg",
+        "label": "pg",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-azure-monitor-datasource",
+          "uid": "azure-monitor"
+        },
+        "query": {
+          "refId": "A",
+          "queryType": "Azure Resource Names",
+          "subscription": "$sub",
+          "resourceGroup": "rg-clipos",
+          "namespace": "microsoft.dbforpostgresql/flexibleservers"
+        },
+        "regex": "",
+        "hide": 2,
+        "refresh": 1,
+        "includeAll": false,
+        "multi": false,
+        "current": {},
+        "options": [],
+        "sort": 0
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Annotations & Alerts",
+        "builtIn": 1,
+        "type": "dashboard",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        }
+      },
+      {
+        "name": "api starts",
+        "enable": true,
+        "hide": false,
+        "iconColor": "#5794F2",
+        "datasource": {
+          "type": "grafana-azure-monitor-datasource",
+          "uid": "azure-monitor"
+        },
+        "target": {
+          "refId": "Anno",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app == \"api\" and msg == \"listening\"\n| project TimeGenerated, text = strcat(\"api started: \", substring(tostring(j.version), 0, 7))",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "table",
+            "dashboardTime": false
+          }
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Right now",
+      "collapsed": false,
+      "panels": [],
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "stat",
+      "title": "api health",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "$sub",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "$sub",
+                "resourceGroup": "rg-clipos",
+                "metricNamespace": "microsoft.web/sites",
+                "resourceName": "$api"
+              }
+            ],
+            "metricNamespace": "microsoft.web/sites",
+            "metricName": "HealthCheckStatus",
+            "aggregation": "Average",
+            "timeGrain": "auto",
+            "allowedTimeGrainsMs": [],
+            "dimensionFilters": [],
+            "alias": "api"
+          }
+        }
+      ],
+      "description": "App Service's /healthz check on the api (100 = every check passed in the last minute).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 100,
+                "to": 100,
+                "result": {
+                  "text": "Healthy",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 99.99,
+                "result": {
+                  "text": "Failing",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "No data",
+                  "color": "orange"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "showPercentChange": false
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "worker health",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "$sub",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "$sub",
+                "resourceGroup": "rg-clipos",
+                "metricNamespace": "microsoft.web/sites",
+                "resourceName": "$worker"
+              }
+            ],
+            "metricNamespace": "microsoft.web/sites",
+            "metricName": "HealthCheckStatus",
+            "aggregation": "Average",
+            "timeGrain": "auto",
+            "allowedTimeGrainsMs": [],
+            "dimensionFilters": [],
+            "alias": "worker"
+          }
+        }
+      ],
+      "description": "App Service's /healthz check on the worker.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "range",
+              "options": {
+                "from": 100,
+                "to": 100,
+                "result": {
+                  "text": "Healthy",
+                  "color": "green"
+                }
+              }
+            },
+            {
+              "type": "range",
+              "options": {
+                "from": 0,
+                "to": 99.99,
+                "result": {
+                  "text": "Failing",
+                  "color": "red"
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "No data",
+                  "color": "orange"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "showPercentChange": false
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 3,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Requests",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceHTTPLogs\n| where $__timeFilter(TimeGenerated)\n| where _ResourceId has \"/sites/clipos-api-\" and UserAgent != \"AlwaysOn\" and CsUriStem != \"/healthz\"\n| extend ms = toint(TimeTaken), status = toint(ScStatus)\n| summarize count()",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "table",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "description": "Requests to the api in the time range, without Always On pings and health checks.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "showPercentChange": false
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "5xx",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceHTTPLogs\n| where $__timeFilter(TimeGenerated)\n| where _ResourceId has \"/sites/clipos-api-\" and UserAgent != \"AlwaysOn\" and CsUriStem != \"/healthz\"\n| extend ms = toint(TimeTaken), status = toint(ScStatus)\n| where status >= 500\n| summarize count()",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "table",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "description": "Server errors from the api in the time range.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "showPercentChange": false
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 9,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "p95 response",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceHTTPLogs\n| where $__timeFilter(TimeGenerated)\n| where _ResourceId has \"/sites/clipos-api-\" and UserAgent != \"AlwaysOn\" and CsUriStem != \"/healthz\"\n| extend ms = toint(TimeTaken), status = toint(ScStatus)\n| where CsUriStem !endswith \"/video.mp4\" and CsUriStem !endswith \"/live\"\n| summarize percentile(ms, 95)",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "table",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "description": "95th percentile response time, without video streams and the show's websocket.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 500
+              },
+              {
+                "color": "red",
+                "value": 2000
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "showPercentChange": false
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Uploads",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where msg == \"upload complete; transcode queued\"\n| summarize count()",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "table",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "description": "Clips whose upload finished in the time range.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "showPercentChange": false
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 15,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Jobs given up",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app == \"worker\" and isnotempty(job_kind)\n| where msg == \"job failed\" and tostring(j.failed) == \"GaveUp\"\n| summarize count()",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "table",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "description": "Jobs that failed for the last time (the clip shows a processing error). Retries are on the Worker dashboard.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "showPercentChange": false
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Logs today",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "Usage\n| where TimeGenerated > startofday(now()) and IsBillable\n| summarize sum(Quantity)",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "table",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "description": "Log Analytics ingestion since 00:00 UTC. At the 100 MB daily cap ingestion stops until the next UTC day, and these dashboards go blank for logs.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decmbytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "showPercentChange": false
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 21,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      }
+    },
+    {
+      "type": "row",
+      "title": "Traffic and jobs",
+      "collapsed": false,
+      "panels": [],
+      "id": 10,
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests by status",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceHTTPLogs\n| where $__timeFilter(TimeGenerated)\n| where _ResourceId has \"/sites/clipos-api-\" and UserAgent != \"AlwaysOn\" and CsUriStem != \"/healthz\"\n| extend ms = toint(TimeTaken), status = toint(ScStatus)\n| summarize count() by bin(TimeGenerated, $__interval), class = strcat(tostring(status / 100), \"xx\")\n| order by TimeGenerated asc",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "time_series",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "interval": "15m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "2xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "3xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "4xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "5xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Response time",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceHTTPLogs\n| where $__timeFilter(TimeGenerated)\n| where _ResourceId has \"/sites/clipos-api-\" and UserAgent != \"AlwaysOn\" and CsUriStem != \"/healthz\"\n| extend ms = toint(TimeTaken), status = toint(ScStatus)\n| where CsUriStem !endswith \"/video.mp4\" and CsUriStem !endswith \"/live\"\n| summarize p50 = percentile(ms, 50), p95 = percentile(ms, 95) by bin(TimeGenerated, $__interval)\n| order by TimeGenerated asc",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "time_series",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "description": "Without video streams and the show's websocket.",
+      "interval": "15m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 12,
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Jobs",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app == \"worker\" and isnotempty(job_kind)\n| where msg in (\"job succeeded\", \"job failed\")\n| extend outcome = iff(msg == \"job succeeded\", \"ok\", \"failed\")\n| summarize count() by bin(TimeGenerated, $__interval), series = strcat(job_kind, \" \", outcome)\n| order by TimeGenerated asc",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "time_series",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "description": "Finished worker jobs by kind. A failed job is retried up to 3 times.",
+      "interval": "15m",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 13,
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Upload to analysed",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where msg in (\"upload complete; transcode queued\", \"analysed killfeed\")\n| extend clip = tostring(j.clip_id)\n| summarize uploaded = minif(TimeGenerated, msg != \"analysed killfeed\"), analysed = maxif(TimeGenerated, msg == \"analysed killfeed\") by clip\n| where isnotnull(uploaded) and isnotnull(analysed)\n| project TimeGenerated = analysed, minutes = (analysed - uploaded) / 1m\n| order by TimeGenerated asc",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "time_series",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "description": "Minutes from a finished upload to its killfeed analysis (transcode, queue wait and analysis). Each point is one clip.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "m",
+          "custom": {
+            "drawStyle": "points",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "always",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "gradientMode": "none",
+            "pointSize": 6
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "decimals": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 14,
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "Resources",
+      "collapsed": false,
+      "panels": [],
+      "id": 15,
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "App Service plan",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "$sub",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "$sub",
+                "resourceGroup": "rg-clipos",
+                "metricNamespace": "microsoft.web/serverfarms",
+                "resourceName": "$plan"
+              }
+            ],
+            "metricNamespace": "microsoft.web/serverfarms",
+            "metricName": "CpuPercentage",
+            "aggregation": "Average",
+            "timeGrain": "auto",
+            "allowedTimeGrainsMs": [],
+            "dimensionFilters": [],
+            "alias": "CPU"
+          }
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "$sub",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "$sub",
+                "resourceGroup": "rg-clipos",
+                "metricNamespace": "microsoft.web/serverfarms",
+                "resourceName": "$plan"
+              }
+            ],
+            "metricNamespace": "microsoft.web/serverfarms",
+            "metricName": "MemoryPercentage",
+            "aggregation": "Average",
+            "timeGrain": "auto",
+            "allowedTimeGrainsMs": [],
+            "dimensionFilters": [],
+            "alias": "Memory"
+          }
+        }
+      ],
+      "description": "The B2 plan the api, the worker and Grafana share. Move to B3 if memory stays above 85%.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 16,
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Postgres",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "$sub",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "$sub",
+                "resourceGroup": "rg-clipos",
+                "metricNamespace": "microsoft.dbforpostgresql/flexibleservers",
+                "resourceName": "$pg"
+              }
+            ],
+            "metricNamespace": "microsoft.dbforpostgresql/flexibleservers",
+            "metricName": "cpu_percent",
+            "aggregation": "Average",
+            "timeGrain": "auto",
+            "allowedTimeGrainsMs": [],
+            "dimensionFilters": [],
+            "alias": "CPU"
+          }
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "$sub",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "$sub",
+                "resourceGroup": "rg-clipos",
+                "metricNamespace": "microsoft.dbforpostgresql/flexibleservers",
+                "resourceName": "$pg"
+              }
+            ],
+            "metricNamespace": "microsoft.dbforpostgresql/flexibleservers",
+            "metricName": "memory_percent",
+            "aggregation": "Average",
+            "timeGrain": "auto",
+            "allowedTimeGrainsMs": [],
+            "dimensionFilters": [],
+            "alias": "Memory"
+          }
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "$sub",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "$sub",
+                "resourceGroup": "rg-clipos",
+                "metricNamespace": "microsoft.dbforpostgresql/flexibleservers",
+                "resourceName": "$pg"
+              }
+            ],
+            "metricNamespace": "microsoft.dbforpostgresql/flexibleservers",
+            "metricName": "storage_percent",
+            "aggregation": "Average",
+            "timeGrain": "auto",
+            "allowedTimeGrainsMs": [],
+            "dimensionFilters": [],
+            "alias": "Storage"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 17,
+      "gridPos": {
+        "x": 8,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Postgres CPU credits",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Monitor",
+          "subscription": "$sub",
+          "azureMonitor": {
+            "resources": [
+              {
+                "subscription": "$sub",
+                "resourceGroup": "rg-clipos",
+                "metricNamespace": "microsoft.dbforpostgresql/flexibleservers",
+                "resourceName": "$pg"
+              }
+            ],
+            "metricNamespace": "microsoft.dbforpostgresql/flexibleservers",
+            "metricName": "cpu_credits_remaining",
+            "aggregation": "Average",
+            "timeGrain": "auto",
+            "allowedTimeGrainsMs": [],
+            "dimensionFilters": [],
+            "alias": "credits left"
+          }
+        }
+      ],
+      "description": "B1ms is burstable: at 0 credits the server is held to its 20% CPU baseline.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "gradientMode": "none"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 18,
+      "gridPos": {
+        "x": 16,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "type": "row",
+      "title": "Problems",
+      "collapsed": false,
+      "panels": [],
+      "id": 19,
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "table",
+      "title": "Latest errors and warnings",
+      "datasource": {
+        "type": "grafana-azure-monitor-datasource",
+        "uid": "azure-monitor"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-azure-monitor-datasource",
+            "uid": "azure-monitor"
+          },
+          "queryType": "Azure Log Analytics",
+          "hide": false,
+          "azureLogAnalytics": {
+            "mode": "raw",
+            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where level in (\"ERROR\", \"WARN\") or (level == \"TEXT\" and isnotempty(trim(@\"\\s+\", ResultDescription)))\n| project TimeGenerated, app, level, [\"kind\"] = job_kind, message = iff(level == \"TEXT\", trim(@\"\\s+\", ResultDescription), msg), error = tostring(j.error)\n| order by TimeGenerated desc\n| take 100",
+            "resources": [
+              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
+            ],
+            "resultFormat": "table",
+            "dashboardTime": false
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "level"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ERROR": {
+                        "color": "red",
+                        "index": 0
+                      },
+                      "WARN": {
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "INFO": {
+                        "color": "text",
+                        "index": 2
+                      },
+                      "DEBUG": {
+                        "color": "#8e8e8e",
+                        "index": 3
+                      },
+                      "TEXT": {
+                        "color": "purple",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "TimeGenerated"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "app"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "level"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kind"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "fields": ""
+        }
+      },
+      "id": 20,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 10
+      }
+    }
+  ]
+}

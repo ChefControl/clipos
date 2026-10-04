@@ -67,8 +67,12 @@ data "azurerm_resources" "web_apps" {
   required_tags       = { app = "clipos" }
 }
 
+# Grafana (grafana.tf) never connects to Postgres, so its IPs aren't let in.
 data "azurerm_linux_web_app" "deployed" {
-  for_each = toset([for r in data.azurerm_resources.web_apps.resources : r.name])
+  for_each = toset([
+    for r in data.azurerm_resources.web_apps.resources : r.name
+    if lookup(r.tags, "component", "") != "grafana"
+  ])
 
   name                = each.key
   resource_group_name = local.rg
