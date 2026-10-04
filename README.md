@@ -53,10 +53,13 @@ After changing an API handler or type, run `make gen-api` and commit `web/openap
 **Pull request gates** (`.github/workflows/ci.yml`): on every push to a PR branch, after a `changes` job that
 skips what a change can't affect (changing the workflow runs everything), each gate runs on its own, in
 parallel:
-- tests with coverage: `rust-coverage` (against Postgres, Azurite, ffmpeg and ONNX Runtime) and `web-coverage`
-  (Vitest plus the iPhone, Android and desktop browser tests); below 95 % of lines fails;
+- tests with coverage: `rust-coverage` (nextest, against Postgres, Azurite, ffmpeg and ONNX Runtime) and
+  `web-coverage`, which adds up `web-unit` (Vitest) and the browser tests, one job per device side by side
+  (`web-e2e`: iphone, android, pc); below 95 % of lines fails;
 - checks: Rust fmt/clippy, `cargo deny`, the web's generated-types freshness, lint, audit, typecheck and build,
   the Auth0 action tests and `tofu fmt`.
+
+CI also runs on `main` after each merge, only so its caches are saved where every PR can restore them.
 
 Results count for the commit they ran on only, and only while the branch holds the latest main: a PR is merged
 when its gates are green on its last commit and it's up to date with main; if main moved, update the branch and
