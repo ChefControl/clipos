@@ -11,12 +11,22 @@ import { useMe } from "./useMe";
 
 export function Layout() {
   const me = useMe();
+  const match = useMatchRoute();
   // The clip page puts the player beside its killfeed panel, so it gets more width.
-  const wide = useMatchRoute()({ to: "/clips/$clipId" });
+  const wide = match({ to: "/clips/$clipId" });
   const width = wide ? "max-w-[96rem]" : "max-w-[90rem]";
 
   if (isAccessDenied(me.error)) {
     return <AccessDenied error={me.error} />;
+  }
+  // The show takes the whole window, with its own top bar (canvas 1.3, 2.2, 2.3).
+  if (match({ to: "/shows/$showId" })) {
+    return (
+      <main id="main" className="min-h-full">
+        <Backdrop />
+        <Outlet />
+      </main>
+    );
   }
 
   return (

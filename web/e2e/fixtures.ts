@@ -170,7 +170,7 @@ const showVideos: Record<string, string> = {
 
 export const SHOW_ID = "20000000-0000-4000-8000-000000000001";
 
-const show: Show = {
+export const show: Show = {
   id: SHOW_ID,
   status: "live",
   host: { id: me.id, handle: "robin", displayName: "Robin", avatarUrl: null, steamName: null },
@@ -184,7 +184,11 @@ const show: Show = {
     playedAt: null,
     addedBy: me.id,
   })),
-  participants: [],
+  participants: members.slice(0, 2).map((member) => ({
+    member,
+    joinedAt: NOW,
+    ready: false,
+  })),
   failContenders: [],
   voters: { clip: [], fail: [] },
   votes: [],
