@@ -93,6 +93,13 @@ export function Reveal({ show, live }: { show: Show; live: ShowLive }) {
                 Watch it again
               </Link>
             )}
+            <Link
+              to="/shows/$showId/replay"
+              params={{ showId: show.id }}
+              className={buttonClass("secondary", "md")}
+            >
+              The replay
+            </Link>
             <Link to="/tonight" className={buttonClass("primary", "md")}>
               Done
             </Link>

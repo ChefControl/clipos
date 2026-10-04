@@ -36,6 +36,7 @@ export default defineConfig({
         "account.spec.ts",
         "upload.spec.ts",
         "tonight.spec.ts",
+        "archive.spec.ts",
       ],
     },
   ],

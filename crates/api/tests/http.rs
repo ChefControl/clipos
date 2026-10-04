@@ -1744,6 +1744,114 @@ async fn shows_are_admin_only_until_they_open(pool: PgPool) {
     assert!(json(&body)["show"].is_null());
 }
 
+/// After a show: its clip of the night and the clips someone pressed 🍌 on have their
+/// filters and badges, each clip says where it played and what beat it, and the winners'
+/// profiles have their trophies. None of it for someone the show isn't open to.
+#[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
+async fn a_shows_winners_in_the_archive_and_on_profiles(pool: PgPool) {
+    let admin = admin_token(&pool).await;
+    invite(&pool, "sam@gmail.com").await;
+    invite(&pool, "kim@gmail.com").await;
+    let a = ready_clip(&pool, "google-oauth2|sam", "sam@gmail.com", "A").await;
+    let b = ready_clip(&pool, "google-oauth2|kim", "kim@gmail.com", "B").await;
+    let members_only = app_with(pool.clone(), false).await;
+    let app = app_with(pool, true).await;
+    let sam = user_token("google-oauth2|sam", "sam@gmail.com");
+    let kim = user_token("google-oauth2|kim", "kim@gmail.com");
+    let call = |method: &'static str, path: String, who: &str, body: Option<Value>| {
+        let (app, who) = (&app, who.to_owned());
+        async move { send(app, method, &path, Some(&who), body, &[]).await }
+    };
+    let id = new_show(&app, &admin, false).await;
+    for who in [&sam, &kim] {
+        let (status, _) = call("POST", format!("/api/shows/{id}/join"), who, None).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, _) = call("POST", format!("/api/shows/{id}/start"), &admin, None).await;
+    assert_eq!(status, StatusCode::OK);
+    for clip in [&a, &b] {
+        let path = format!("/api/shows/{id}/clips/{clip}/played");
+        let (status, body) = call("POST", path, &admin, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let tap = json!({ "clipId": b, "emoji": "🍌", "atMs": 1000 });
+    let (status, _) = call(
+        "POST",
+        format!("/api/shows/{id}/reactions"),
+        &sam,
+        Some(tap),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call("POST", format!("/api/shows/{id}/finale"), &admin, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let pick = |clip: &str| Some(json!({ "clipId": clip }));
+    for (who, cat, clip) in [(&kim, "clip", &a), (&admin, "clip", &a), (&sam, "fail", &b)] {
+        let path = format!("/api/shows/{id}/votes/{cat}");
+        let (status, body) = call("PUT", path, who, pick(clip)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, body) = call("POST", format!("/api/shows/{id}/end"), &admin, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The archive's filters: clips of the night, and every clip that got a 🍌.
+    let titles = |body: &str| -> Vec<String> {
+        json(body)["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["title"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (_, body) = get(&app, "/api/clips?night=clip", Some(&kim)).await;
+    assert_eq!(titles(&body), ["A"]);
+    let (_, body) = get(&app, "/api/clips?night=fail", Some(&kim)).await;
+    assert_eq!(titles(&body), ["B"]);
+    let (status, _) = get(&app, "/api/clips?night=best", Some(&kim)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The badges, and where each played.
+    let (_, body) = get(&app, &format!("/api/clips/{a}"), Some(&kim)).await;
+    let clip_a = json(&body);
+    assert_eq!(clip_a["clipOfTheNight"], true);
+    assert_eq!(clip_a["failOfTheNight"], false);
+    assert_eq!(clip_a["playedIn"]["showId"], id.as_str());
+    assert_eq!(clip_a["playedIn"]["position"], 1);
+    assert_eq!(clip_a["playedIn"]["count"], 2);
+    assert!(clip_a["playedIn"]["lostTo"].is_null());
+    let (_, body) = get(&app, &format!("/api/clips/{b}"), Some(&kim)).await;
+    let clip_b = json(&body);
+    assert_eq!(clip_b["failOfTheNight"], true);
+    assert_eq!(clip_b["playedIn"]["position"], 2);
+    assert_eq!(clip_b["playedIn"]["lostTo"]["title"], "A");
+    // Lists carry the badges, not where they played.
+    let (_, body) = get(&app, "/api/clips", Some(&kim)).await;
+    let listed = json(&body)["clips"].as_array().unwrap().clone();
+    assert!(listed.iter().all(|c| c["playedIn"].is_null()));
+    assert!(listed.iter().any(|c| c["clipOfTheNight"] == true));
+
+    // Profiles: shows hosted, and trophies.
+    let (_, body) = get(&app, "/api/users/sam", Some(&kim)).await;
+    let shows = &json(&body)["shows"];
+    assert_eq!(shows["hosted"], 0);
+    assert_eq!(shows["trophies"].as_array().unwrap().len(), 1);
+    assert_eq!(shows["trophies"][0]["category"], "clip");
+    assert_eq!(shows["trophies"][0]["clip"]["title"], "A");
+    assert_eq!(shows["trophies"][0]["showId"], id.as_str());
+    let (_, body) = get(&app, "/api/users/admin", Some(&kim)).await;
+    assert_eq!(json(&body)["shows"]["hosted"], 1);
+
+    // While shows are admins-only, members see none of it.
+    let (status, body) = get(&members_only, "/api/clips?night=clip", Some(&kim)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(titles(&body).is_empty());
+    let (_, body) = get(&members_only, &format!("/api/clips/{a}"), Some(&kim)).await;
+    assert_eq!(json(&body)["clipOfTheNight"], false);
+    assert!(json(&body)["playedIn"].is_null());
+    let (_, body) = get(&members_only, "/api/users/sam", Some(&kim)).await;
+    assert!(json(&body)["shows"].is_null());
+}
+
 /// Nobody pressed 🍌: the finale goes straight to clip of the night. Before the finale
 /// there's no vote clock at all.
 #[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]

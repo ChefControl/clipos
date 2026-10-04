@@ -1,10 +1,17 @@
 //! Members (profiles, the "who's in this clip" picker) and tag autocomplete.
 
 use axum::extract::State;
-use clipos_core::social::{self, Member};
+use std::collections::HashMap;
+
+use clipos_core::{
+    clips, shows,
+    social::{self, Member},
+};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+use uuid::Uuid;
 
+use super::clips::{ClipView, views};
 use crate::{
     AppState, ErrorBody,
     error::ApiError,
@@ -41,6 +48,28 @@ pub struct Profile {
     pub fire_count: i64,
     /// When they first signed in.
     pub joined_at: chrono::DateTime<chrono::Utc>,
+    /// Their shows: hosted, and the trophies their clips won. Only for people the show is
+    /// open to.
+    pub shows: Option<ProfileShows>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileShows {
+    /// Shows they hosted that ended.
+    pub hosted: i64,
+    /// Clips of theirs that won clip or fail of the night, newest show first.
+    pub trophies: Vec<Trophy>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Trophy {
+    #[schema(inline)]
+    pub category: shows::Category,
+    pub clip: ClipView,
+    pub show_id: Uuid,
+    pub show_started_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A member's profile. Their clips: `GET /api/clips?uploader={handle}`.
@@ -85,12 +114,45 @@ pub async fn get_profile(
     .bind(member.id)
     .fetch_one(&state.pool)
     .await?;
+    let shows = if crate::routes::shows::shows_open_to(&state, &viewer) {
+        let wins = shows::wins(&state.pool, member.id).await?;
+        let ids: Vec<Uuid> = wins.iter().map(|w| w.clip_id).collect();
+        let by_id: HashMap<Uuid, ClipView> = views(
+            &state,
+            clips::get_many(&state.pool, &ids).await?,
+            &viewer,
+            false,
+        )
+        .await?
+        .into_iter()
+        .map(|v| (v.id, v))
+        .collect();
+        Some(ProfileShows {
+            hosted: shows::hosted(&state.pool, member.id).await?,
+            trophies: wins
+                .into_iter()
+                .filter_map(|w| {
+                    // The same clip can win both: each trophy gets its own copy.
+                    let clip = by_id.get(&w.clip_id).cloned()?;
+                    Some(Trophy {
+                        category: w.category,
+                        clip,
+                        show_id: w.show_id,
+                        show_started_at: w.started_at,
+                    })
+                })
+                .collect(),
+        })
+    } else {
+        None
+    };
     Ok(Json(Profile {
         member,
         clip_count,
         featured_count,
         fire_count,
         joined_at,
+        shows,
     }))
 }
 

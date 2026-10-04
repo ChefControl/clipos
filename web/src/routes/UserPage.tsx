@@ -2,8 +2,11 @@ import { useAuth0 } from "@auth0/auth0-react";
 import { getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { isNotFound } from "../api/errors";
+import { TrophyIcon } from "../clips/ClipCard";
 import { ClipGrid } from "../clips/ClipGrid";
-import { type Clip, useProfile, useRestoreClip, useTrash } from "../clips/hooks";
+import { type Clip, type Profile, useProfile, useRestoreClip, useTrash } from "../clips/hooks";
+import { Kip } from "../kip/Kip";
+import { shortDate, showName } from "../lib/format";
 import { useTitle } from "../lib/useTitle";
 import { Avatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -33,8 +36,8 @@ export function userSearch(search: Record<string, unknown>): {
 const monthYear = (iso: string) =>
   new Date(iso).toLocaleDateString("en-US", { month: "short", year: "numeric" });
 
-// Your profile and a friend's page (canvas 4.2, 4.3). The trophy shelf and the show
-// stats (shows hosted, clips and fails of the night) arrive with the shows in S7.
+// Your profile and a friend's page (canvas 4.2, 4.3), with the show stats (shows hosted,
+// clips and fails of the night) and the trophy shelf once the show is open to you.
 export function UserPage() {
   const { handle } = route.useParams();
   const { edit, tab: tabParam } = route.useSearch();
@@ -86,6 +89,24 @@ export function UserPage() {
         <div className="glass squircle flex flex-wrap items-center gap-x-11 gap-y-3 rounded-3xl px-6 py-4">
           <Stat n={p.clipCount} label={p.clipCount === 1 ? "clip" : "clips"} />
           <Stat n={p.featuredCount} label="featured in" />
+          {p.shows && (
+            <>
+              <Stat
+                n={p.shows.hosted}
+                label={p.shows.hosted === 1 ? "show hosted" : "shows hosted"}
+              />
+              <Stat
+                n={p.shows.trophies.filter((t) => t.category === "clip").length}
+                label="clips of the night"
+                className="text-accent-strong"
+              />
+              <Stat
+                n={p.shows.trophies.filter((t) => t.category === "fail").length}
+                label="fails of the night"
+                className="text-[#c9bcff]"
+              />
+            </>
+          )}
           <Stat n={`🔥 ${p.fireCount}`} label="reactions" />
           <span className="text-sm text-muted sm:ml-auto">Since {monthYear(p.joinedAt)}</span>
         </div>
@@ -95,6 +116,9 @@ export function UserPage() {
         className={`grid grid-cols-1 items-start gap-6 ${isMe ? "lg:grid-cols-[minmax(0,1fr)_360px]" : ""}`}
       >
         <div className="flex min-w-0 flex-col gap-5">
+          {p?.shows && (p.shows.trophies.length > 0 || isMe) && (
+            <TrophyShelf trophies={p.shows.trophies} />
+          )}
           <div className="flex self-start rounded-full bg-white/5 p-1">
             {(
               [
@@ -155,10 +179,10 @@ export function UserPage() {
   );
 }
 
-function Stat({ n, label }: { n: ReactNode; label: string }) {
+function Stat({ n, label, className = "" }: { n: ReactNode; label: string; className?: string }) {
   return (
     <span className="flex flex-col gap-0.5">
-      <span className="text-3xl leading-none font-extrabold">{n}</span>
+      <span className={`text-3xl leading-none font-extrabold ${className}`}>{n}</span>
       <span className="text-[13px] text-muted">{label}</span>
     </span>
   );
@@ -313,5 +337,66 @@ function TrashRow({ clip }: { clip: Clip }) {
         Restore
       </Button>
     </div>
+  );
+}
+
+type Trophy = NonNullable<Profile["shows"]>["trophies"][number];
+
+/** Their clips that won a show, newest first (4.2, 4.3). */
+function TrophyShelf({ trophies }: { trophies: Trophy[] }) {
+  return (
+    <section className="flex flex-col gap-3" aria-label="Trophy shelf">
+      <h2 className="flex items-center gap-2 text-xl font-bold">
+        <TrophyIcon className="h-[18px] w-[18px] text-accent" />
+        Trophy shelf
+      </h2>
+      {trophies.length === 0 ? (
+        <p className="text-soft">
+          Empty for now. Clips of yours that win clip or fail of the night land here.
+        </p>
+      ) : (
+        <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {trophies.map((t) => {
+            const clip = t.category === "clip";
+            return (
+              <li key={`${t.showId}-${t.category}`}>
+                <Link
+                  to="/clips/$clipId"
+                  params={{ clipId: t.clip.id }}
+                  className={`squircle flex min-w-0 items-center gap-3 rounded-[18px] py-2.5 pr-3.5 pl-2.5 text-text ring-1 ring-inset hover:text-white ${
+                    clip ? "bg-accent/8 ring-accent/35" : "bg-violet/8 ring-violet/35"
+                  }`}
+                >
+                  <Kip
+                    pose={clip ? "king" : "banana-slip"}
+                    className="-my-1.5 h-14 w-14 shrink-0"
+                  />
+                  <span className="flex min-w-0 flex-col">
+                    <span
+                      className={`font-mono text-[10px] ${clip ? "text-accent-strong" : "text-[#c9bcff]"}`}
+                    >
+                      {clip ? "Clip of the night" : "Fail of the night"}
+                    </span>
+                    <span dir="auto" className="truncate text-[17px] font-bold">
+                      {t.clip.title}
+                    </span>
+                    <span className="text-xs text-muted">
+                      {showName(t.showStartedAt)}
+                      {t.showStartedAt && `, ${shortDate(t.showStartedAt)}`}
+                    </span>
+                  </span>
+                  <span
+                    className="squircle ml-auto aspect-video w-24 shrink-0 rounded-[10px] bg-surface bg-cover bg-center"
+                    style={{
+                      backgroundImage: t.clip.posterUrl ? `url(${t.clip.posterUrl})` : undefined,
+                    }}
+                  />
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }

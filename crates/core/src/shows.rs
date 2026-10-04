@@ -841,6 +841,95 @@ pub async fn end(pool: &PgPool, id: Uuid, by: Uuid, tie_break: TieBreak) -> Resu
     Ok(ended)
 }
 
+/// Which of `clips` won clip of the night, and which fail of the night, in a show that
+/// ended: for the badges on clip cards (S7).
+pub async fn winners_among(
+    pool: &PgPool,
+    clips: &[Uuid],
+) -> sqlx::Result<(
+    std::collections::HashSet<Uuid>,
+    std::collections::HashSet<Uuid>,
+)> {
+    let rows: Vec<(Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT clip_winner_id, fail_winner_id FROM shows
+          WHERE status = 'ended'
+            AND (clip_winner_id = ANY($1) OR fail_winner_id = ANY($1))",
+    )
+    .bind(clips)
+    .fetch_all(pool)
+    .await?;
+    let pick = |c: Option<Uuid>| c.filter(|c| clips.contains(c));
+    Ok((
+        rows.iter().filter_map(|r| pick(r.0)).collect(),
+        rows.iter().filter_map(|r| pick(r.1)).collect(),
+    ))
+}
+
+/// The ended show a clip last played in, and where in it: the clip page's "Played at …
+/// show" line (S7).
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct PlayedIn {
+    pub show_id: Uuid,
+    pub started_at: Option<DateTime<Utc>>,
+    /// 1-based, in the order the show played its clips.
+    pub position: i64,
+    /// How many clips it played.
+    pub count: i64,
+    pub clip_winner_id: Option<Uuid>,
+}
+
+pub async fn played_in(pool: &PgPool, clip: Uuid) -> sqlx::Result<Option<PlayedIn>> {
+    sqlx::query_as(
+        "SELECT s.id AS show_id, s.started_at,
+                (SELECT count(*) FROM show_clips o
+                  WHERE o.show_id = s.id AND NOT o.dropped AND o.played_at IS NOT NULL
+                    AND (o.played_at, o.position) <= (sc.played_at, sc.position)) AS position,
+                (SELECT count(*) FROM show_clips o
+                  WHERE o.show_id = s.id AND NOT o.dropped AND o.played_at IS NOT NULL) AS count,
+                s.clip_winner_id
+           FROM show_clips sc JOIN shows s ON s.id = sc.show_id
+          WHERE sc.clip_id = $1 AND NOT sc.dropped AND sc.played_at IS NOT NULL
+            AND s.status = 'ended'
+          ORDER BY s.ended_at DESC LIMIT 1",
+    )
+    .bind(clip)
+    .fetch_optional(pool)
+    .await
+}
+
+/// One of someone's clips that won a category of a show that ended.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct Win {
+    pub category: Category,
+    pub clip_id: Uuid,
+    pub show_id: Uuid,
+    pub started_at: Option<DateTime<Utc>>,
+}
+
+/// The trophies of `owner`'s clips, newest show first (a profile's trophy shelf).
+pub async fn wins(pool: &PgPool, owner: Uuid) -> sqlx::Result<Vec<Win>> {
+    sqlx::query_as(
+        "SELECT w.category, w.clip_id, s.id AS show_id, s.started_at
+           FROM shows s
+           CROSS JOIN LATERAL (VALUES ('clip', s.clip_winner_id), ('fail', s.fail_winner_id))
+                AS w(category, clip_id)
+           JOIN clips c ON c.id = w.clip_id
+          WHERE s.status = 'ended' AND c.owner_id = $1 AND c.deleted_at IS NULL
+          ORDER BY s.ended_at DESC, w.category",
+    )
+    .bind(owner)
+    .fetch_all(pool)
+    .await
+}
+
+/// How many shows `user` hosted that ended.
+pub async fn hosted(pool: &PgPool, user: Uuid) -> sqlx::Result<i64> {
+    sqlx::query_scalar("SELECT count(*) FROM shows WHERE host_id = $1 AND status = 'ended'")
+        .bind(user)
+        .fetch_one(pool)
+        .await
+}
+
 /// The hub's last saved live state (S5), to resume after a restart.
 pub async fn live_state(pool: &PgPool, id: Uuid) -> sqlx::Result<Option<serde_json::Value>> {
     sqlx::query_scalar("SELECT live_state FROM shows WHERE id = $1")

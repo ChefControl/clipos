@@ -709,6 +709,8 @@ export interface components {
             autoTags: string[];
             /** @description The viewer may edit and delete it (uploader or admin). */
             canEdit: boolean;
+            /** @description Won clip of the night in a show (for people the show is open to). */
+            clipOfTheNight: boolean;
             /** Format: date-time */
             createdAt: string;
             /**
@@ -721,6 +723,8 @@ export interface components {
             durationMs?: number | null;
             /** @description Why processing failed. Only shown to the uploader. */
             error?: string | null;
+            /** @description Won fail of the night in a show (for people the show is open to). */
+            failOfTheNight: boolean;
             /** @description The kind of failure, for the uploader's failed screen. */
             failureReason?: ("tooLong" | "notAVideo" | "unreadable" | "server") | null;
             /** Format: float */
@@ -745,6 +749,7 @@ export interface components {
             originalFilename: string;
             /** @description Read SAS (2 h) once ready; only on the single-clip endpoints. */
             playbackUrl?: string | null;
+            playedIn?: components["schemas"]["PlayedInView"] | null;
             /** @description Friends tagged as playing in it. */
             players: components["schemas"]["Member"][];
             /** @description Read SAS (2 h) once ready. */
@@ -897,6 +902,12 @@ export interface components {
             /** Format: int32 */
             position: number;
         };
+        LostTo: {
+            /** Format: uuid */
+            clipId: string;
+            title: string;
+            uploader: string;
+        };
         /** @description You, plus what's switched on for you. */
         Me: components["schemas"]["User"] & {
             /** @description The show (lobby, hosting, the hold switch on upload) is open to you. */
@@ -965,6 +976,24 @@ export interface components {
             /** Format: date-time */
             startedAt?: string | null;
         };
+        /**
+         * @description The clip page's "Played at Friday night show, Oct 2 · Clip 1 of 3 · lost the vote to
+         *     Sh15's clip".
+         */
+        PlayedInView: {
+            /** Format: int64 */
+            count: number;
+            lostTo?: components["schemas"]["LostTo"] | null;
+            /**
+             * Format: int64
+             * @description 1-based, in the order the show played them.
+             */
+            position: number;
+            /** Format: uuid */
+            showId: string;
+            /** Format: date-time */
+            startedAt?: string | null;
+        };
         Profile: components["schemas"]["Member"] & {
             /**
              * Format: int64
@@ -988,6 +1017,16 @@ export interface components {
              * @description When they first signed in.
              */
             joinedAt: string;
+            shows?: components["schemas"]["ProfileShows"] | null;
+        };
+        ProfileShows: {
+            /**
+             * Format: int64
+             * @description Shows they hosted that ended.
+             */
+            hosted: number;
+            /** @description Clips of theirs that won clip or fail of the night, newest show first. */
+            trophies: components["schemas"]["Trophy"][];
         };
         /**
          * @description Settings the SPA needs before it can log in. Served at runtime so one image works
@@ -1087,6 +1126,15 @@ export interface components {
             clips: components["schemas"]["ClipView"][];
             lastShow?: components["schemas"]["PastShow"] | null;
             show?: components["schemas"]["ShowView"] | null;
+        };
+        Trophy: {
+            /** @enum {string} */
+            category: "clip" | "fail";
+            clip: components["schemas"]["ClipView"];
+            /** Format: uuid */
+            showId: string;
+            /** Format: date-time */
+            showStartedAt?: string | null;
         };
         /** @description Fields to change; omitted fields stay as they are. */
         UpdateClip: {
@@ -1469,6 +1517,11 @@ export interface operations {
                 q?: string;
                 /** @description Clips someone reacted to with this emoji (one of the six reactions). */
                 reaction?: string;
+                /**
+                 * @description `clip`: clips of the night. `fail`: clips someone pressed 🍌 on in a show. Only for
+                 *     people the show is open to; for anyone else, no clips.
+                 */
+                night?: "clip" | "fail";
                 /** @description `nextCursor` from the previous page. */
                 cursor?: string;
             };

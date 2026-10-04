@@ -452,7 +452,7 @@ test("overlapping pages don't show a clip twice", async ({ page }) => {
   );
   await page.goto("/?sort=top");
   await expect(page.getByText(c?.title ?? "").first()).toBeVisible();
-  await expect(page.locator('main a[href^="/clips/"]')).toHaveCount(3);
+  await expect(page.getByTestId("clip-grid").locator('a[href^="/clips/"]')).toHaveCount(3);
 });
 
 test("player shortcuts wait while a dialog is open", async ({ page }) => {
@@ -665,7 +665,7 @@ test("cards: a failed pill with contrast, a ready clip without a poster, a broke
     (route) => route.fulfill({ json: { clips: [noPoster, clips.failed], nextCursor: null } }),
   );
   await page.goto("/");
-  const card = page.locator(`a[href="/clips/${clips.long.id}"]`);
+  const card = page.getByTestId("clip-grid").locator(`a[href="/clips/${clips.long.id}"]`);
   await expect(card.getByText(noPoster.title)).toHaveAttribute("dir", "auto");
   await expect(card).not.toContainText("Processing");
   // The picture didn't load: initials instead.
