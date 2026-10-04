@@ -218,34 +218,6 @@
           "type": "grafana",
           "uid": "-- Grafana --"
         }
-      },
-      {
-        "name": "api starts",
-        "enable": true,
-        "hide": false,
-        "iconColor": "#5794F2",
-        "datasource": {
-          "type": "grafana-azure-monitor-datasource",
-          "uid": "azure-monitor"
-        },
-        "target": {
-          "refId": "Anno",
-          "datasource": {
-            "type": "grafana-azure-monitor-datasource",
-            "uid": "azure-monitor"
-          },
-          "queryType": "Azure Log Analytics",
-          "hide": false,
-          "azureLogAnalytics": {
-            "mode": "raw",
-            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app == \"api\" and msg == \"listening\"\n| project TimeGenerated, text = strcat(\"api started: \", substring(tostring(j.version), 0, 7))",
-            "resources": [
-              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
-            ],
-            "resultFormat": "table",
-            "dashboardTime": false
-          }
-        }
       }
     ]
   },
@@ -292,7 +264,16 @@
             "metricName": "CpuPercentage",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "CPU"
           }
@@ -318,7 +299,16 @@
             "metricName": "MemoryPercentage",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "Memory"
           }
@@ -413,7 +403,16 @@
             "metricName": "MemoryWorkingSet",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "api"
           }
@@ -439,7 +438,16 @@
             "metricName": "MemoryWorkingSet",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "worker"
           }
@@ -465,7 +473,16 @@
             "metricName": "MemoryWorkingSet",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "grafana"
           }
@@ -543,7 +560,11 @@
             "metricName": "HealthCheckStatus",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              300000,
+              3600000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "api"
           }
@@ -569,7 +590,11 @@
             "metricName": "HealthCheckStatus",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              300000,
+              3600000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "worker"
           }
@@ -668,7 +693,8 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -733,7 +759,16 @@
             "metricName": "cpu_percent",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "CPU"
           }
@@ -759,7 +794,16 @@
             "metricName": "memory_percent",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "Memory"
           }
@@ -785,7 +829,16 @@
             "metricName": "storage_percent",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "Storage"
           }
@@ -864,7 +917,16 @@
             "metricName": "cpu_credits_remaining",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "remaining"
           }
@@ -890,7 +952,16 @@
             "metricName": "cpu_credits_consumed",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "consumed"
           }
@@ -969,7 +1040,16 @@
             "metricName": "active_connections",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "active"
           }
@@ -995,7 +1075,16 @@
             "metricName": "connections_failed",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "failed"
           }
@@ -1021,7 +1110,16 @@
             "metricName": "connections_succeeded",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "succeeded"
           }
@@ -1115,7 +1213,16 @@
             "metricName": "xact_commit",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "commits"
           }
@@ -1141,7 +1248,16 @@
             "metricName": "xact_rollback",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "rollbacks"
           }
@@ -1167,7 +1283,16 @@
             "metricName": "deadlocks",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "deadlocks"
           }
@@ -1260,7 +1385,13 @@
             "metricName": "database_size_bytes",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "databases"
           }
@@ -1286,7 +1417,16 @@
             "metricName": "storage_used",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "storage used"
           }
@@ -1508,7 +1648,12 @@
             "metricName": "UsedCapacity",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "used"
           }
@@ -1587,7 +1732,16 @@
             "metricName": "Egress",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "egress"
           }
@@ -1613,7 +1767,16 @@
             "metricName": "Ingress",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "ingress"
           }
@@ -1691,7 +1854,16 @@
             "metricName": "Transactions",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [
               {
                 "dimension": "ResponseType",
@@ -1821,7 +1993,8 @@
                 "value": 100
               }
             ]
-          }
+          },
+          "displayName": "${__field.labels.DataType}"
         },
         "overrides": []
       },

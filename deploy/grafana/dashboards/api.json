@@ -98,34 +98,6 @@
           "type": "grafana",
           "uid": "-- Grafana --"
         }
-      },
-      {
-        "name": "api starts",
-        "enable": true,
-        "hide": false,
-        "iconColor": "#5794F2",
-        "datasource": {
-          "type": "grafana-azure-monitor-datasource",
-          "uid": "azure-monitor"
-        },
-        "target": {
-          "refId": "Anno",
-          "datasource": {
-            "type": "grafana-azure-monitor-datasource",
-            "uid": "azure-monitor"
-          },
-          "queryType": "Azure Log Analytics",
-          "hide": false,
-          "azureLogAnalytics": {
-            "mode": "raw",
-            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app == \"api\" and msg == \"listening\"\n| project TimeGenerated, text = strcat(\"api started: \", substring(tostring(j.version), 0, 7))",
-            "resources": [
-              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
-            ],
-            "resultFormat": "table",
-            "dashboardTime": false
-          }
-        }
       }
     ]
   },
@@ -604,7 +576,8 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.route}"
         },
         "overrides": []
       },
@@ -678,9 +651,25 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.class}"
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "1xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",
@@ -862,7 +851,16 @@
             "metricName": "MemoryWorkingSet",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "memory"
           }
@@ -888,7 +886,16 @@
             "metricName": "CpuTime",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "CPU seconds"
           }
