@@ -1,7 +1,7 @@
 // Phone regression tests: every page, on an iPhone (WebKit) and an Android phone
 // (Chromium), with the API mocked. See playwright.config.ts.
 
-import { clips } from "./fixtures";
+import { clips, SHOW_ID } from "./fixtures";
 import { layoutProblems } from "./layout";
 import { cspViolations, open, pages, signOuts } from "./pages";
 import { expect, test } from "./test";
@@ -133,4 +133,48 @@ test("with /api/me down, the banner fits and Sign out is on screen", async ({ pa
   expect(await signOuts(page)).toEqual([
     { logoutParams: { returnTo: new URL(page.url()).origin } },
   ]);
+});
+
+test("a show link on a phone says to open it on a PC, and doesn't join", async ({ page }) => {
+  let joined = false;
+  await page.routeWebSocket(/\/api\/shows\/[^/]+\/live$/, () => {
+    joined = true;
+  });
+  await open(page, `/shows/${SHOW_ID}`);
+  await expect(page.getByRole("heading", { name: "Open this on a PC" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copy the link" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(await layoutProblems(page)).toEqual([]);
+  expect(joined).toBe(false);
+  await page.getByRole("link", { name: "Back to clipos" }).click();
+  await expect(page.getByRole("heading", { name: "Archive" })).toBeVisible();
+});
+
+test("on a phone the Live pill is a strip under the top bar", async ({ page }, testInfo) => {
+  await open(page, "/", false, undefined, (p) =>
+    p.route("**/api/shows/current", (route) =>
+      route.fulfill({
+        json: {
+          id: SHOW_ID,
+          status: "live",
+          host: {
+            id: "x",
+            handle: "maximilian-the-awper",
+            displayName: "Maximilian Alexander Konstantinopoulos",
+            avatarUrl: null,
+            steamName: null,
+          },
+          startedAt: null,
+        },
+      }),
+    ),
+  );
+  const pill = page.getByTestId("live-strip");
+  await expect(pill).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await testInfo.attach("live-pill.png", {
+    body: await page.screenshot(),
+    contentType: "image/png",
+  });
+  expect(await layoutProblems(page)).toEqual([]);
 });

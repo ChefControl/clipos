@@ -1,229 +1,158 @@
-import { useQuery } from "@tanstack/react-query";
-import { getRouteApi } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
-import { call, isNotFound } from "../api/errors";
-import { useApi } from "../auth/ApiProvider";
-import { useClip } from "../clips/hooks";
+import { getRouteApi, Link } from "@tanstack/react-router";
+import { useRef } from "react";
+import { isNotFound } from "../api/errors";
+import { Kip } from "../kip/Kip";
+import { usePhone } from "../lib/usePhone";
 import { useTitle } from "../lib/useTitle";
-import { isSafari, SyncEngine, type SyncStatus, targetMs } from "../show/sync";
-import { useShowLive } from "../show/useShowLive";
-import { Button } from "../ui/Button";
+import { joinLink, type Show as ShowView, useShow } from "../show/hooks";
+import { Joining } from "../show/Joining";
+import { Stage } from "../show/Stage";
+import { type ShowEvent, useShowLive } from "../show/useShowLive";
+import { Backdrop } from "../ui/Backdrop";
+import { Button, buttonClass } from "../ui/Button";
 import { LoadError } from "../ui/LoadError";
+import { Panel } from "../ui/Panel";
 import { useToast } from "../ui/Toast";
 import { NotFound } from "./NotFound";
+import { useMe } from "./useMe";
 
 const route = getRouteApi("/shows/$showId");
 
-const STATUS: Record<SyncStatus, string> = {
-  synced: "Synced",
-  catchingUp: "Catching up",
-  starting: "Starting…",
-  blocked: "Click to join with sound",
-  idle: "Waiting for the host",
-};
-
-// The show, bare (S5): the synced player and the host's controls, to prove the sync. S6
-// turns this into the show screens from the canvas (2.2, 2.3).
+// A show's page, the join link: the waiting room until the host starts (1.3), then the
+// show (2.2, 2.3). It takes the whole window; the app's top bar steps aside.
 export function ShowLive() {
   const { showId } = route.useParams();
-  const api = useApi();
-  const show = useQuery({
-    queryKey: ["show", showId],
-    queryFn: () => call(api.GET("/api/shows/{id}", { params: { path: { id: showId } } })),
-  });
+  // The show is PC-only until Epic 2 (decision 39): a phone gets the way to a PC, and
+  // doesn't join the room.
+  if (usePhone()) return <OpenOnAPc showId={showId} />;
+  return <Show showId={showId} />;
+}
+
+function Show({ showId }: { showId: string }) {
+  const me = useMe();
+  const show = useShow(showId);
   const toast = useToast();
   useTitle(show.data && `${show.data.host.displayName}'s show`);
+  // The screen on now takes the room's one-off events.
+  const events = useRef<((e: ShowEvent) => void) | null>(null);
   // Refusals the connection survives ("only while the show is live") as toasts; the rate
   // limit's "slow down" quietly.
   const live = useShowLive(showId, (e) => {
     if (e.type === "error" && e.message !== "slow down") toast(e.message, "danger");
+    events.current?.(e);
   });
-  const clipId = live.state?.clipId ?? null;
-  const clip = useClip(clipId ?? "", { enabled: !!clipId });
-  const video = useRef<HTMLVideoElement>(null);
-  // The engine drives one clip: the one it was made for.
-  const engine = useRef<{ clipId: string; sync: SyncEngine } | null>(null);
-  const [status, setStatus] = useState<SyncStatus>("idle");
-  const [drift, setDrift] = useState(0);
-  const isHost = !!live.presence && live.presence.hostId === live.userId;
-
-  const send = live.client?.send.bind(live.client);
-  const lineup = show.data?.lineup.filter((l) => !l.dropped) ?? [];
-  // The next clip, fetched while this one plays so it starts without a stall (decision 35).
-  const current = lineup.findIndex((l) => l.clip.id === clipId);
-  const nextId = lineup.slice(current + 1).find((l) => !l.playedAt)?.clip.id ?? null;
-  const next = useClip(nextId ?? "", { enabled: !!nextId && !!clipId });
-  const now = () => live.client?.clock.now() ?? Date.now();
-
-  // Each clip keeps the first playback link it got: a refetch signs a new one, and a new
-  // src would reload the video mid-clip (and miss the preloaded copy).
-  const urls = useRef(new Map<string, string>());
-  for (const c of [clip.data, next.data]) {
-    if (c?.playbackUrl && !urls.current.has(c.id)) urls.current.set(c.id, c.playbackUrl);
-  }
-  const src = (clipId && urls.current.get(clipId)) || null;
-  const nextSrc = (nextId && urls.current.get(nextId)) || null;
-
-  // A new clip: silence the old one straight away (until the new one's link arrives the
-  // video still holds it), then a new engine once its source is in.
-  useEffect(() => {
-    const v = video.current;
-    if (!v) return;
-    if (engine.current && engine.current.clipId !== clipId) {
-      v.pause();
-      engine.current = null;
-      setStatus("idle");
-    }
-    if (clipId && src && !engine.current) {
-      engine.current = { clipId, sync: new SyncEngine(v, { safari: isSafari() }) };
-    }
-  }, [clipId, src]);
-
-  // Step it four times a second and on every time update.
-  const stateRef = useRef(live.state);
-  stateRef.current = live.state;
-  const clientRef = useRef(live.client);
-  clientRef.current = live.client;
-  useEffect(() => {
-    const step = () => {
-      const e = engine.current;
-      const c = clientRef.current;
-      const state = stateRef.current;
-      if (!e || e.clipId !== state?.clipId || !c?.clock.synced) return;
-      setStatus(e.sync.step(state, c.clock.now()));
-      setDrift(Math.round(e.sync.driftMs));
-    };
-    const waiting = () => engine.current?.sync.setWaiting(true);
-    const playing = () => engine.current?.sync.setWaiting(false);
-    const every = setInterval(step, 250);
-    const v = video.current;
-    v?.addEventListener("timeupdate", step);
-    v?.addEventListener("waiting", waiting);
-    v?.addEventListener("playing", playing);
-    return () => {
-      clearInterval(every);
-      v?.removeEventListener("timeupdate", step);
-      v?.removeEventListener("waiting", waiting);
-      v?.removeEventListener("playing", playing);
-    };
-  }, []);
 
   // No such show (or shows aren't open to you yet).
-  if (isNotFound(show.error)) {
-    return <NotFound />;
+  if (isNotFound(show.error)) return <NotFound />;
+  if (show.error) {
+    return (
+      <Centered>
+        <LoadError error={show.error} onRetry={show.refetch} />
+      </Centered>
+    );
   }
+  if (!show.data || !me.data) return null;
 
-  return (
-    <section className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-3xl font-extrabold tracking-tight">
-          {show.data ? (
-            <>
-              <bdi>{show.data.host.displayName}</bdi>'s show
-            </>
-          ) : (
-            "Show"
-          )}
-        </h1>
-        {/* Reconnecting is routine (a deploy, an idle drop): said here, quietly. */}
-        <span
-          role="status"
-          className="rounded-full bg-white/10 px-3 py-1 text-sm"
-          data-testid="connection"
-        >
-          {live.connection}
-        </span>
-        <span className="rounded-full bg-white/10 px-3 py-1 text-sm" data-testid="sync-status">
-          {STATUS[status]}
-        </span>
-        <span className="font-mono text-xs text-muted" data-testid="drift">
-          {drift} ms
-        </span>
-      </div>
-
-      {show.error && <LoadError error={show.error} onRetry={show.refetch} />}
-
-      <div className="squircle relative aspect-video overflow-hidden rounded-[26px] bg-black">
-        {/* biome-ignore lint/a11y/useMediaCaption: game clips have no captions. */}
-        <video
-          ref={video}
-          src={src ?? undefined}
-          playsInline
-          preload="auto"
-          className="h-full w-full object-contain"
-          data-testid="show-video"
-        />
-        {nextSrc && (
-          // Never shown (display: none keeps it out of the accessibility tree); it only
-          // preloads.
-          <video src={nextSrc} preload="auto" muted className="hidden" data-testid="next-video" />
-        )}
-        {status === "blocked" && (
-          <div className="absolute inset-0 grid place-items-center bg-black/60">
-            <Button
-              variant="primary"
-              size="lg"
-              onClick={() => {
-                engine.current?.sync.unblock();
-                video.current?.play().catch(() => {});
-              }}
-            >
-              Join with sound
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {isHost && send && (
-        <div className="flex flex-wrap gap-2" data-testid="host-controls">
-          {lineup.map((l) => (
-            <Button
-              key={l.clip.id}
-              size="sm"
-              onClick={() => send({ type: "load", clipId: l.clip.id })}
-            >
-              Load {l.clip.title}
-            </Button>
-          ))}
-          <Button size="sm" variant="primary" onClick={() => send({ type: "play" })}>
-            Play
-          </Button>
-          <Button size="sm" onClick={() => send({ type: "pause" })}>
-            Pause
-          </Button>
-          <Button
-            size="sm"
-            onClick={() =>
-              live.state &&
-              send({
-                type: "seek",
-                positionMs: Math.max(0, targetMs(live.state, now()) - 10_000),
-              })
-            }
-          >
-            −10 s
-          </Button>
-          <Button
-            size="sm"
-            onClick={() =>
-              live.state && send({ type: "seek", positionMs: targetMs(live.state, now()) + 10_000 })
-            }
-          >
-            +10 s
-          </Button>
-        </div>
-      )}
-      {live.over && (
-        <p className="text-sm text-soft" data-testid="show-over">
-          The show's over.
-        </p>
-      )}
-      {/* Closed for good: why, once (the server's reason). */}
-      {live.connection === "closed" && !live.over && (
-        <p role="alert" className="text-sm text-danger">
+  const status = show.data.status;
+  // Who you are in the room: the server says so when you connect.
+  const meId = live.userId ?? me.data.id;
+  if (live.over || status === "ended" || status === "abandoned") return <Over show={show.data} />;
+  // Closed for good: why, once (the server's reason).
+  if (live.connection === "closed") {
+    return (
+      <Centered>
+        <p role="alert" className="text-lg text-danger">
           {live.error ?? "The connection to the show closed."}
         </p>
-      )}
-    </section>
+      </Centered>
+    );
+  }
+  if (status === "lobby") return <Joining show={show.data} live={live} meId={meId} />;
+  if (status === "finale") return <Finale show={show.data} />;
+  return <Stage show={show.data} live={live} meId={meId} events={events} />;
+}
+
+function Centered({ children }: { children: React.ReactNode }) {
+  return <div className="grid min-h-dvh place-items-center p-6">{children}</div>;
+}
+
+/** The finale: voting arrives in S7. */
+function Finale({ show }: { show: ShowView }) {
+  return (
+    <Centered>
+      <Backdrop />
+      <Panel className="flex max-w-lg flex-col items-center gap-4 p-10 text-center">
+        <Kip pose="king" className="h-32 w-32" />
+        <h1 className="text-4xl font-extrabold tracking-tight">Finale</h1>
+        <p className="text-soft">
+          That was every clip. <bdi>{show.host.displayName}</bdi>'s show is picking clip and fail of
+          the night.
+        </p>
+      </Panel>
+    </Centered>
+  );
+}
+
+function Over({ show }: { show: ShowView }) {
+  return (
+    <Centered>
+      <Backdrop />
+      <Panel className="flex max-w-lg flex-col items-center gap-4 p-10 text-center">
+        <Kip pose="asleep" className="h-32 w-32" />
+        <h1 className="text-4xl font-extrabold tracking-tight" data-testid="show-over">
+          The show's over.
+        </h1>
+        <p className="text-soft">
+          {show.status === "abandoned"
+            ? "Everyone left, so it ended without a finale. Its clips come back for the next show."
+            : "Thanks for watching. The clips are in the archive now."}
+        </p>
+        <div className="flex gap-3">
+          <Link to="/tonight" className={buttonClass("secondary")}>
+            Tonight
+          </Link>
+          <Link to="/" className={buttonClass("primary")}>
+            Archive
+          </Link>
+        </div>
+      </Panel>
+    </Centered>
+  );
+}
+
+/** A show link opened on a phone (decision 39): the show needs a bigger screen for now. */
+function OpenOnAPc({ showId }: { showId: string }) {
+  const toast = useToast();
+  useTitle("Open this on a PC");
+  return (
+    <Centered>
+      <Backdrop />
+      <Panel className="flex max-w-md flex-col items-center gap-4 p-8 text-center">
+        <Kip pose="bouncer" className="h-32 w-32" />
+        <h1 className="text-[34px] leading-tight font-extrabold tracking-tight">
+          Open this on a PC
+        </h1>
+        <p className="text-soft">
+          The show is made for a big screen for now: open the link on your computer and keep talking
+          in Discord. Phones get their own show soon.
+        </p>
+        <div className="flex flex-wrap justify-center gap-3">
+          <Button
+            variant="primary"
+            onClick={() =>
+              navigator.clipboard
+                .writeText(joinLink(showId))
+                .then(() => toast("Link copied. Paste it on your PC."))
+                .catch(() => toast(`Couldn't copy it. The link: ${joinLink(showId)}`, "danger"))
+            }
+          >
+            Copy the link
+          </Button>
+          <Link to="/" className={buttonClass("secondary")}>
+            Back to clipos
+          </Link>
+        </div>
+      </Panel>
+    </Centered>
   );
 }

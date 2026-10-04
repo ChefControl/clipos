@@ -7,7 +7,9 @@ import type { components } from "../src/api/schema";
 
 type Clip = components["schemas"]["ClipView"];
 type Member = components["schemas"]["Member"];
+type PastShow = components["schemas"]["PastShow"];
 type Show = components["schemas"]["ShowView"];
+type Tonight = components["schemas"]["Tonight"];
 type User = components["schemas"]["User"];
 
 const POSTER = "/e2e-media/poster.jpg";
@@ -168,7 +170,7 @@ const showVideos: Record<string, string> = {
 
 export const SHOW_ID = "20000000-0000-4000-8000-000000000001";
 
-const show: Show = {
+export const show: Show = {
   id: SHOW_ID,
   status: "live",
   host: { id: me.id, handle: "robin", displayName: "Robin", avatarUrl: null, steamName: null },
@@ -182,7 +184,11 @@ const show: Show = {
     playedAt: null,
     addedBy: me.id,
   })),
-  participants: [],
+  participants: members.slice(0, 2).map((member) => ({
+    member,
+    joinedAt: NOW,
+    ready: false,
+  })),
   failContenders: [],
   voters: { clip: [], fail: [] },
   votes: [],
@@ -190,6 +196,29 @@ const show: Show = {
   clipWinnerId: null,
   failWinnerId: null,
   reactions: [],
+};
+
+/** The last show: the long clip won, the normal one was the fail. */
+export const pastShow: PastShow = {
+  id: "20000000-0000-4000-8000-000000000000",
+  host: { ...show.host },
+  startedAt: "2026-09-25T19:00:00Z",
+  endedAt: "2026-09-25T20:00:00Z",
+  participants: members,
+  clips: [clips.long, clips.normal],
+  clipWinnerId: clips.long.id,
+  failWinnerId: clips.normal.id,
+  clipWinnerVotes: 2,
+  failWinnerVotes: 3,
+  clipVoters: 3,
+  failVoters: 3,
+};
+
+/** /tonight with no show on: three clips waiting, one of them saved for the show. */
+export const tonight: Tonight = {
+  show: null,
+  clips: [clips.normal, { ...clips.held, isMine: false, teaser: true }, clips.long],
+  lastShow: pastShow,
 };
 
 type ClipAnalysis = components["schemas"]["ClipAnalysis"];
@@ -346,6 +375,10 @@ export async function mockApi(page: Page, { meError }: { meError?: string } = {}
       return json(route, { error: "not_found", message: "not analysed" }, 404);
     }
     if (path === `/api/shows/${SHOW_ID}`) return json(route, show);
+    if (path === "/api/shows/tonight") return json(route, tonight);
+    // No show on, unless a test says otherwise.
+    if (path === "/api/shows/current") return json(route, null);
+    if (method === "GET" && path === "/api/shows") return json(route, [pastShow]);
     const forShow = [showClip, showClip2].find((c) => path === `/api/clips/${c.id}`);
     if (forShow) return json(route, { ...forShow, playbackUrl: showVideos[forShow.id] });
     const clip = path.match(/^\/api\/clips\/([^/]+)$/);

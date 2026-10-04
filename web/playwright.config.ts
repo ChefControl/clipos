@@ -35,6 +35,7 @@ export default defineConfig({
         "clip.spec.ts",
         "account.spec.ts",
         "upload.spec.ts",
+        "tonight.spec.ts",
       ],
     },
   ],

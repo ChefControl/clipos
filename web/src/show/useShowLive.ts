@@ -1,6 +1,7 @@
 import { useAuth0 } from "@auth0/auth0-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import type { Show } from "./hooks";
 import { type Connection, LiveClient, liveUrl, type Presence, type ServerMsg } from "./live";
 import type { LiveState } from "./sync";
 
@@ -71,9 +72,17 @@ export function useShowLive(showId: string, onEvent?: (event: ShowEvent) => void
           case "state":
             setLive((l) => ({ ...l, state: msg.state }));
             return;
-          case "presence":
+          case "presence": {
             setLive((l) => ({ ...l, presence: msg.presence }));
+            // Connecting joins the show: someone who wasn't in it yet is in its details
+            // now.
+            const show = queryClient.getQueryData<Show>(["show", showId]);
+            const known = new Set(show?.participants.map((p) => p.member.id));
+            if (show && msg.presence.online.some((id) => !known.has(id))) {
+              queryClient.invalidateQueries({ queryKey: ["show", showId] });
+            }
             return;
+          }
           case "showChanged":
             queryClient.invalidateQueries({ queryKey: ["show", showId] });
             return;

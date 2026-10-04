@@ -2,6 +2,7 @@ import { useAuth0 } from "@auth0/auth0-react";
 import { Link, Outlet, useMatchRoute } from "@tanstack/react-router";
 import { isAccessDenied, needsSignIn } from "../api/errors";
 import { Logo } from "../kip/Kip";
+import { LivePill } from "../show/LivePill";
 import { Avatar } from "../ui/Avatar";
 import { Backdrop } from "../ui/Backdrop";
 import { Button } from "../ui/Button";
@@ -11,12 +12,25 @@ import { useMe } from "./useMe";
 
 export function Layout() {
   const me = useMe();
+  const match = useMatchRoute();
   // The clip page puts the player beside its killfeed panel, so it gets more width.
-  const wide = useMatchRoute()({ to: "/clips/$clipId" });
+  const wide = match({ to: "/clips/$clipId" });
   const width = wide ? "max-w-[96rem]" : "max-w-[90rem]";
 
   if (isAccessDenied(me.error)) {
     return <AccessDenied error={me.error} />;
+  }
+  // While a show's on, a way in from every page; the lobby says it itself.
+  const pill = !!me.data?.shows && !match({ to: "/tonight" });
+
+  // The show takes the whole window, with its own top bar (canvas 1.3, 2.2, 2.3).
+  if (match({ to: "/shows/$showId" })) {
+    return (
+      <main id="main" className="min-h-full">
+        <Backdrop />
+        <Outlet />
+      </main>
+    );
   }
 
   return (
@@ -49,22 +63,27 @@ export function Layout() {
             </span>
           </Link>
           <nav className="glass flex min-w-0 gap-1 rounded-full p-1">
-            {/* Tonight (the show's lobby) joins the bar in S6, admins first. Admin is under
-                your profile's Account panel. */}
+            {/* Tonight, the show's lobby, once the show is open to you (admins first,
+                decision 40). Admin is under your profile's Account panel. */}
+            {me.data?.shows && <NavLink to="/tonight">Tonight</NavLink>}
             <NavLink to="/">Archive</NavLink>
             <NavLink to="/upload">Upload</NavLink>
           </nav>
-          {me.data && (
-            <Link
-              to="/u/$handle"
-              params={{ handle: me.data.handle }}
-              aria-label="Your profile"
-              className="ml-auto flex shrink-0 items-center rounded-full p-0.5 hover:ring-2 hover:ring-white/20"
-            >
-              <Avatar name={me.data.displayName} url={me.data.avatarUrl} size={34} />
-            </Link>
-          )}
+          <div className="ml-auto flex min-w-0 items-center gap-3">
+            <LivePill enabled={pill} className="hidden sm:flex" />
+            {me.data && (
+              <Link
+                to="/u/$handle"
+                params={{ handle: me.data.handle }}
+                aria-label="Your profile"
+                className="flex shrink-0 items-center rounded-full p-0.5 hover:ring-2 hover:ring-white/20"
+              >
+                <Avatar name={me.data.displayName} url={me.data.avatarUrl} size={34} />
+              </Link>
+            )}
+          </div>
         </div>
+        <LivePill enabled={pill} strip className="mx-4 -mt-1 mb-2 sm:hidden" />
       </header>
 
       <main
@@ -107,7 +126,7 @@ function MeError({ error, retry }: { error: Error; retry: () => void }) {
   );
 }
 
-function NavLink({ to, children }: { to: "/" | "/upload"; children: string }) {
+function NavLink({ to, children }: { to: "/" | "/tonight" | "/upload"; children: string }) {
   return (
     <Link
       to={to}

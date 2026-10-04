@@ -21,6 +21,7 @@ export const pages: {
   { name: "feed", path: "/", ready: `text=${clips.normal.title}` },
   { name: "feed-filtered", path: "/?tag=ace&player=jamie&sort=top", ready: "text=#ace" },
   { name: "upload", path: "/upload", ready: "h1:has-text('Upload a clip')" },
+  { name: "tonight", path: "/tonight", ready: "text=Host tonight's show" },
   { name: "clip-long-title", path: `/clips/${clips.long.id}`, ready: "text=Your stats" },
   {
     name: "clip-analysis-pending",
@@ -54,8 +55,17 @@ export const pages: {
   { name: "not-found", path: "/nope/nothing-here", ready: "text=Nothing here." },
 ];
 
-export async function open(page: Page, path: string, signedOut = false, meError?: string) {
+/** Opens `path` with the API mocked. `routes` adds a test's own answers over the mock's
+ *  (registered later, so they win). */
+export async function open(
+  page: Page,
+  path: string,
+  signedOut = false,
+  meError?: string,
+  routes?: (page: Page) => Promise<unknown>,
+) {
   await mockApi(page, { meError });
+  await routes?.(page);
   await page.addInitScript((out) => {
     if (out) window.localStorage.setItem("e2e-signed-out", "1");
     else window.localStorage.removeItem("e2e-signed-out");

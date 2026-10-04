@@ -9,6 +9,7 @@ import { Archive, archiveSearch } from "./routes/Archive";
 import { Layout } from "./routes/Layout";
 import { NotFound } from "./routes/NotFound";
 import { Profile } from "./routes/Profile";
+import { Tonight } from "./routes/Tonight";
 import { Upload } from "./routes/Upload";
 import { UserPage, userSearch } from "./routes/UserPage";
 
@@ -21,6 +22,7 @@ const routeTree = rootRoute.addChildren([
     component: Archive,
     validateSearch: archiveSearch,
   }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/tonight", component: Tonight }),
   createRoute({ getParentRoute: () => rootRoute, path: "/me", component: Profile }),
   createRoute({ getParentRoute: () => rootRoute, path: "/admin", component: Admin }),
   createRoute({ getParentRoute: () => rootRoute, path: "/upload", component: Upload }),
