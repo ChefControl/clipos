@@ -61,16 +61,20 @@ pub fn owner(corner: &RgbImage, row: &Row) -> Owner {
     let (y0, y1) = (row.y0.round() as i32, row.y1.round() as i32);
     let row_h = (y1 - y0).max(1);
 
-    // Red outline: the top and bottom edges are red along most of the row. Search a few
-    // pixels around each edge, since the model's box is not pixel-exact.
+    // Red outline: a red line along most of the row near its top edge and another near its
+    // bottom edge. The model's box can be a few pixels off the row (a sixth of its height
+    // happens), so each line is searched for a quarter of the height around its edge. The
+    // lines of an outline are 0.80-0.84 box heights apart on real rows; stacked rows touch,
+    // so a row between two outlined ones has red lines just outside its box, about 1.08
+    // apart, which aren't its outline.
     let band = (row_h / 8).max(2);
     let inner = (x0 + row_h / 2)..(x1 - row_h / 2);
-    let edge_red = |y: i32| {
+    let red_line = |y: i32| {
         let columns = inner.clone().step_by(2);
         let total = columns.clone().count().max(1);
         let red = columns
             .filter(|&x| {
-                (y - band..=y + band).any(|yy| {
+                (y - 1..=y + 1).any(|yy| {
                     let p = px(x, yy);
                     p[0] >= 110 && redness(p) >= 60
                 })
@@ -78,7 +82,20 @@ pub fn owner(corner: &RgbImage, row: &Row) -> Owner {
             .count();
         red as f32 / total as f32
     };
-    if edge_red(y0) >= 0.6 && edge_red(y1) >= 0.6 {
+    let search = (row_h / 4).max(2);
+    let lines_near = |edge: i32| -> Vec<i32> {
+        (edge - search..=edge + search)
+            .filter(|&y| red_line(y) >= 0.6)
+            .collect()
+    };
+    let (tops, bottoms) = (lines_near(y0), lines_near(y1));
+    let outline = tops.iter().any(|top| {
+        bottoms.iter().any(|bottom| {
+            let apart = (bottom - top) as f32 / row_h as f32;
+            (0.7..=0.95).contains(&apart)
+        })
+    });
+    if outline {
         return Owner::MyKill;
     }
 
@@ -156,6 +173,50 @@ mod tests {
         paint(&mut c, (100, 41, 300, 43), [100, 10, 10]);
         paint(&mut c, (100, 62, 300, 64), [230, 190, 30]);
         assert_eq!(owner(&c, &ROW), Owner::Other);
+    }
+
+    #[test]
+    fn the_outline_is_found_around_a_box_a_few_pixels_off() {
+        let mut c = corner([90, 100, 110], [30, 30, 30]);
+        paint(&mut c, (100, 40, 300, 42), [200, 20, 30]);
+        paint(&mut c, (100, 62, 300, 64), [200, 20, 30]);
+        // The box 5 px low (a fifth of the row): its top edge is inside the row, its
+        // bottom edge on the scene below.
+        let low = Row {
+            y0: 45.0,
+            y1: 69.0,
+            ..ROW
+        };
+        assert_eq!(owner(&c, &low), Owner::MyKill);
+        let high = Row {
+            y0: 35.0,
+            y1: 59.0,
+            ..ROW
+        };
+        assert_eq!(owner(&c, &high), Owner::MyKill);
+    }
+
+    #[test]
+    fn a_row_between_two_outlined_rows_is_not_outlined() {
+        // Stacked rows touch, as in CS2: boxes 16..40, 40..64 and 64..88, each outline 2-3
+        // px inside its box. The outer two are the player's kills.
+        let mut c = RgbImage::from_pixel(320, 120, Rgb([90, 100, 110]));
+        paint(&mut c, (100, 16, 300, 88), [30, 30, 30]);
+        for (y0, y1) in [(16, 40), (64, 88)] {
+            paint(&mut c, (100, y0 + 2, 300, y0 + 4), [200, 20, 30]);
+            paint(&mut c, (100, y1 - 3, 300, y1 - 1), [200, 20, 30]);
+        }
+        // The middle row's box: red lines just outside it, but too far apart to be its
+        // outline.
+        assert_eq!(owner(&c, &ROW), Owner::Other);
+        for y0 in [16.0, 64.0] {
+            let outlined = Row {
+                y0,
+                y1: y0 + 24.0,
+                ..ROW
+            };
+            assert_eq!(owner(&c, &outlined), Owner::MyKill);
+        }
     }
 
     #[test]
