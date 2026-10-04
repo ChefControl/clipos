@@ -986,3 +986,80 @@ test("an ended show nobody voted in says so", async ({ page }) => {
   await expect(page.getByText("Nobody voted for clip of the night.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Fail of the night" })).toHaveCount(0);
 });
+
+test("Kip's kill card: on the uploader's death, for everyone, then gone", async ({
+  browser,
+}, testInfo) => {
+  test.setTimeout(60_000);
+  const hub = new Hub();
+  const withKills = (myKills: number, deathAt: number | null) => async (page: Page) => {
+    await page.route(`**/api/clips/${showClip.id}/analysis`, (route) =>
+      route.fulfill({
+        json: {
+          status: "done",
+          stats: {
+            kills: myKills,
+            myKills,
+            myDeaths: deathAt == null ? 0 : 1,
+            multiKill: null,
+            weapons: {},
+            modifiers: {},
+          },
+          kills:
+            deathAt == null ? [] : [{ t: deathAt, owner: "myDeath", weapon: "awp", modifiers: [] }],
+        },
+      }),
+    );
+  };
+  const host = await join(await browser.newContext(), hub, me.id, withKills(4, 2));
+  const friend = await join(await browser.newContext(), hub, FRIEND, withKills(4, 2));
+  await playFirstClip(host, friend);
+
+  // Two seconds in, the uploader dies: the card comes up on both screens.
+  for (const page of [host, friend]) {
+    const card = page.getByTestId("kill-card");
+    await expect(card).toHaveAttribute("data-kills", "4", { timeout: 5_000 });
+    await expect(card.getByRole("img", { name: /4 kills/ })).toBeVisible();
+  }
+  await friend.waitForTimeout(2_000);
+  await testInfo.attach("kill-card.png", {
+    body: await friend.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
+  // Five seconds later it's gone.
+  hub.jump(8_000);
+  await expect(friend.getByTestId("kill-card")).toHaveCount(0);
+  await expect(host.getByTestId("kill-card")).toHaveCount(0);
+});
+
+test("no death: the kill card takes the clip's last seconds, and an ace lands hard", async ({
+  page,
+}) => {
+  const hub = new Hub();
+  await page.routeWebSocket(/\/api\/shows\/[^/]+\/live$/, (ws) => hub.attach(ws, me.id));
+  await open(page, `/shows/${SHOW_ID}`, false, undefined, (p) =>
+    p.route(`**/api/clips/${showClip.id}/analysis`, (route) =>
+      route.fulfill({
+        json: {
+          status: "done",
+          stats: {
+            kills: 5,
+            myKills: 5,
+            myDeaths: 0,
+            multiKill: "ace",
+            weapons: {},
+            modifiers: {},
+          },
+          kills: [],
+        },
+      }),
+    ),
+  );
+  await page.getByRole("button", { name: `Start with ${showClip.title}` }).click();
+  await startPlaying(page);
+  await expect(page.getByTestId("kill-card")).toHaveCount(0);
+  hub.jump(36_000);
+  const card = page.getByTestId("kill-card");
+  await expect(card).toHaveAttribute("data-kills", "5");
+  await expect(card).toHaveClass(/ace/);
+});
