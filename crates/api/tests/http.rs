@@ -1744,6 +1744,28 @@ async fn shows_are_admin_only_until_they_open(pool: PgPool) {
     assert!(json(&body)["show"].is_null());
 }
 
+/// Nobody pressed 🍌: the finale goes straight to clip of the night. Before the finale
+/// there's no vote clock at all.
+#[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
+async fn a_finale_without_fails_votes_on_the_clip_alone(pool: PgPool) {
+    let admin = admin_token(&pool).await;
+    invite(&pool, "sam@gmail.com").await;
+    let a = ready_clip(&pool, "google-oauth2|sam", "sam@gmail.com", "A").await;
+    let app = app(pool).await;
+    let show = new_show(&app, &admin, true).await;
+    let (_, body) = get(&app, &format!("/api/shows/{show}"), Some(&admin)).await;
+    assert!(json(&body)["finale"].is_null());
+    let path = format!("/api/shows/{show}/clips/{a}/played");
+    let (status, _) = send(&app, "POST", &path, Some(&admin), None, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let path = format!("/api/shows/{show}/finale");
+    let (status, body) = send(&app, "POST", &path, Some(&admin), None, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let finale = &json(&body)["finale"];
+    assert!(finale["failFrom"].is_null() && finale["failUntil"].is_null());
+    assert_eq!(finale["clipFrom"], finale["startedAt"]);
+}
+
 /// Every page's "Live · Join" pill: the show that's on, in brief, from the lobby to the
 /// finale; nothing once it's over, and nothing for people the show isn't open to.
 #[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
@@ -1856,6 +1878,17 @@ async fn a_show_from_lobby_to_winners(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(json(&body)["failContenders"], json!([a]));
+    // Someone pressed 🍌: fail of the night first, then clip of the night, 20 s each.
+    let finale = &json(&body)["finale"];
+    let at = |k: &str| {
+        chrono::DateTime::parse_from_rfc3339(finale[k].as_str().unwrap())
+            .unwrap()
+            .timestamp_millis()
+    };
+    assert_eq!(at("failFrom"), at("startedAt"));
+    assert_eq!(at("failUntil") - at("failFrom"), 20_000);
+    assert_eq!(at("clipFrom"), at("failUntil"));
+    assert_eq!(at("clipUntil") - at("clipFrom"), 20_000);
 
     let vote = |cat: &str| format!("/api/shows/{id}/votes/{cat}");
     let pick = |clip: &str| Some(json!({ "clipId": clip }));

@@ -492,13 +492,28 @@ class StoredShow {
   constructor(patch: Partial<ShowView> = {}) {
     this.show = structuredClone({ ...show, ...patch });
   }
+  /** What `end` answers, in turn; once they're used up it ends the show as `ended`. */
+  endings: { status: number; json: unknown }[] = [];
+  /** The show as it is once ended. */
+  ended: Partial<ShowView> = {};
   routes = async (page: Page) => {
     await page.route(`**/api/shows/${SHOW_ID}**`, (route) => {
       const req = route.request();
       const path = new URL(req.url()).pathname;
-      if (req.method() === "POST") {
-        this.posts.push({ path, body: req.postData() ? req.postDataJSON() : null });
+      if (req.method() === "POST" || req.method() === "PUT") {
+        const body = req.postData() ? req.postDataJSON() : null;
+        this.posts.push({ path, body });
         if (path.endsWith("/start")) this.show.status = "live";
+        const vote = path.match(/\/votes\/(clip|fail)$/)?.[1] as "clip" | "fail" | undefined;
+        if (vote) {
+          this.show.myVotes[vote] = body.clipId;
+          this.show.voters[vote] = [FRIEND];
+        }
+        if (path.endsWith("/end")) {
+          const reply = this.endings.shift();
+          if (reply) return route.fulfill({ status: reply.status, json: reply.json });
+          Object.assign(this.show, { status: "ended", ...this.ended });
+        }
       }
       return route.fulfill({ json: this.show });
     });
@@ -670,14 +685,10 @@ test("the side panel: up next, play one now, hide it, add a clip", async ({ page
   ]);
 });
 
-test("the finale and an abandoned show have their own screens", async ({ page }) => {
-  const stored = new StoredShow({ status: "finale" });
+test("an abandoned show has its own screen", async ({ page }) => {
+  const stored = new StoredShow({ status: "abandoned" });
   await page.routeWebSocket(/\/api\/shows\/[^/]+\/live$/, (ws) => new Hub().attach(ws, me.id));
   await open(page, `/shows/${SHOW_ID}`, false, undefined, stored.routes);
-  await expect(page.getByRole("heading", { name: "Finale" })).toBeVisible();
-
-  stored.show.status = "abandoned";
-  await page.reload();
   await expect(page.getByTestId("show-over")).toBeVisible();
   await expect(page.getByText("Everyone left, so it ended without a finale.")).toBeVisible();
   await page.getByRole("link", { name: "Tonight" }).click();
@@ -770,7 +781,7 @@ test("after the last clip the host opens the finale; End the show gets there ear
   expect(stored.posts).toHaveLength(2);
   stored.show.status = "finale";
   hub.say({ type: "showChanged" });
-  await expect(friend.getByRole("heading", { name: "Finale" })).toBeVisible();
+  await expect(friend.getByRole("heading", { name: "Counting the votes…" })).toBeVisible();
 });
 
 test("the host drops out: the clip plays on, then anyone can take over after a minute", async ({
@@ -815,4 +826,163 @@ test("someone waiting for a host who's gone can leave", async ({ page }) => {
   await expect(away.getByRole("button", { name: /^Take over in 0:\d\d$/ })).toBeDisabled();
   await away.getByRole("button", { name: "Leave the show" }).click();
   await expect(page).toHaveURL(/\/tonight$/);
+});
+
+/** A show in its finale: both clips played, 🍌 on the first. Its vote's windows are
+ *  `failLeftMs` and then `clipMs` from now on the hub's clock (none for fail: no 🍌). */
+function finaleShow(hub: Hub, failLeftMs: number | null, clipMs = 20_000) {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const t = hub.now();
+  const failUntil = failLeftMs == null ? null : t + failLeftMs;
+  const clipFrom = failUntil ?? t;
+  return new StoredShow({
+    status: "finale",
+    lineup: show.lineup.map((l) => ({ ...l, playedAt: show.createdAt })),
+    failContenders: failLeftMs == null ? [] : [showClip.id],
+    finale: {
+      startedAt: iso(t - 1_000),
+      failFrom: failUntil == null ? null : iso(t - 1_000),
+      failUntil: failUntil == null ? null : iso(failUntil),
+      clipFrom: iso(clipFrom),
+      clipUntil: iso(clipFrom + clipMs),
+    },
+  });
+}
+
+/** Moves the vote's clock on: the windows end `ms` from now, or are over (null). */
+function retime(stored: StoredShow, hub: Hub, clipLeftMs: number | null) {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const t = hub.now();
+  const f = stored.show.finale;
+  if (!f) return;
+  f.failUntil = f.failUntil && iso(t - 30_000);
+  f.failFrom = f.failFrom && iso(t - 50_000);
+  f.clipFrom = iso(t - 10_000);
+  f.clipUntil = iso(clipLeftMs == null ? t - 2_000 : t + clipLeftMs);
+  hub.say({ type: "showChanged" });
+}
+
+test("the finale: fail of the night, then clip of the night, then the winners", async ({
+  browser,
+}, testInfo) => {
+  test.setTimeout(60_000);
+  const hub = new Hub();
+  const stored = finaleShow(hub, 15_000);
+  stored.ended = {
+    endedAt: new Date(hub.now() + 60_000).toISOString(),
+    clipWinnerId: showClip2.id,
+    failWinnerId: showClip.id,
+    votes: [
+      { category: "fail", clipId: showClip.id, votes: 1 },
+      { category: "clip", clipId: showClip2.id, votes: 2 },
+    ],
+  };
+  const host = await join(await browser.newContext(), hub, me.id, stored.routes);
+  const friend = await join(await browser.newContext(), hub, FRIEND, stored.routes);
+
+  // Fail of the night first: only the 🍌 clip.
+  const vote = friend.getByRole("region", { name: "Fail of the night" });
+  await expect(vote.getByRole("heading", { name: "Fail of the night?" })).toBeVisible();
+  await expect(vote.getByRole("timer")).toHaveText(/^0:1\d$/);
+  const cards = vote.getByRole("button", { pressed: false });
+  await expect(cards).toHaveCount(1);
+  await friend.getByRole("button", { name: /Show clip/ }).click();
+  expect(stored.posts.at(-1)).toEqual({
+    path: `/api/shows/${SHOW_ID}/votes/fail`,
+    body: { clipId: showClip.id },
+  });
+  await expect(friend.getByRole("button", { name: /Show clip/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(friend.getByTestId("voted")).toContainText("1 of 2 voted");
+  await testInfo.attach("finale-vote.png", {
+    body: await friend.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
+  expect(await layoutProblems(friend)).toEqual([]);
+
+  // Then clip of the night: every clip played.
+  retime(stored, hub, 15_000);
+  const clipVote = host.getByRole("region", { name: "Clip of the night" });
+  await expect(clipVote.getByRole("heading", { name: "Clip of the night?" })).toBeVisible();
+  await expect(clipVote.getByRole("button", { name: /show clip/i })).toHaveCount(2);
+
+  // The vote closes: the host's screen ends the show, and everyone gets the winners.
+  retime(stored, hub, null);
+  await expect(friend.getByText("Counting the votes…")).toBeVisible();
+  await expect.poll(() => stored.posts.at(-1)?.path).toBe(`/api/shows/${SHOW_ID}/end`);
+  expect(stored.posts.at(-1)?.body).toEqual({ tieBreak: {} });
+  hub.say({ type: "showChanged" });
+
+  // Fail of the night is revealed first, then clip of the night.
+  for (const page of [host, friend]) {
+    await expect(page.getByRole("heading", { name: "Fail of the night" })).toBeVisible();
+    await expect(page.getByTestId("winner")).toContainText("1 of 1 vote");
+  }
+  await testInfo.attach("fail-of-the-night.png", {
+    body: await friend.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
+  await friend.getByRole("button", { name: "Clip of the night" }).click();
+  await expect(friend.getByRole("heading", { name: "Clip of the night" })).toBeVisible();
+  await expect(friend.getByTestId("winner")).toContainText("Second show clip");
+  await expect(friend.getByTestId("winner")).toContainText("2 of 2 votes");
+  await expect(friend.getByRole("img", { name: "Kip with a crown" })).toBeVisible();
+  await friend.waitForFunction(() =>
+    [...document.images].every((i) => i.complete && i.naturalWidth > 0),
+  );
+  await testInfo.attach("clip-of-the-night.png", {
+    body: await friend.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
+  expect(await layoutProblems(friend)).toEqual([]);
+  await friend.getByRole("link", { name: "Done" }).click();
+  await expect(friend).toHaveURL(/\/tonight$/);
+});
+
+test("a tie in the finale: the host decides", async ({ browser }) => {
+  const hub = new Hub();
+  const stored = finaleShow(hub, null);
+  stored.endings = [
+    {
+      status: 409,
+      json: {
+        error: "conflict",
+        message: "the clip of the night vote is tied: pick one of the tied clips",
+        tied: { clip: [showClip.id, showClip2.id], fail: [] },
+      },
+    },
+  ];
+  stored.ended = { endedAt: new Date(hub.now() - 60_000).toISOString(), clipWinnerId: showClip.id };
+  const host = await join(await browser.newContext(), hub, me.id, stored.routes);
+  const friend = await join(await browser.newContext(), hub, FRIEND, stored.routes);
+
+  // No 🍌 tonight: straight to clip of the night, and Kip says so.
+  await expect(friend.getByText("nobody marked a fail tonight.")).toBeVisible();
+  retime(stored, hub, null);
+
+  const decide = host.getByRole("region", { name: "Host decides" });
+  await expect(decide).toBeVisible();
+  const announce = decide.getByRole("button", { name: "Announce the winners" });
+  await expect(announce).toBeDisabled();
+  await decide.getByRole("button", { name: showClip.title, exact: true }).click();
+  await announce.click();
+  expect(stored.posts.at(-1)).toEqual({
+    path: `/api/shows/${SHOW_ID}/end`,
+    body: { tieBreak: { clip: showClip.id } },
+  });
+  // Friends wait meanwhile, then get the winner: long ended, so straight to the clip.
+  await expect(friend.getByText("Robin announces the winners in a moment.")).toBeVisible();
+  hub.say({ type: "showChanged" });
+  await expect(friend.getByRole("heading", { name: "Clip of the night" })).toBeVisible();
+  await expect(friend.getByTestId("winner")).toContainText("0 of 0 votes");
+});
+
+test("an ended show nobody voted in says so", async ({ page }) => {
+  const stored = new StoredShow({ status: "ended", endedAt: show.createdAt });
+  await page.routeWebSocket(/\/api\/shows\/[^/]+\/live$/, () => {});
+  await open(page, `/shows/${SHOW_ID}`, false, undefined, stored.routes);
+  await expect(page.getByText("Nobody voted for clip of the night.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Fail of the night" })).toHaveCount(0);
 });
