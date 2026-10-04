@@ -173,7 +173,7 @@
       },
       {
         "name": "api starts",
-        "enable": true,
+        "enable": false,
         "hide": false,
         "iconColor": "#5794F2",
         "datasource": {
@@ -244,7 +244,11 @@
             "metricName": "HealthCheckStatus",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              300000,
+              3600000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "api"
           }
@@ -355,7 +359,11 @@
             "metricName": "HealthCheckStatus",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              300000,
+              3600000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "worker"
           }
@@ -936,9 +944,25 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.class}"
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "1xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",
@@ -1139,7 +1163,8 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -1276,7 +1301,16 @@
             "metricName": "CpuPercentage",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "CPU"
           }
@@ -1302,7 +1336,16 @@
             "metricName": "MemoryPercentage",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "Memory"
           }
@@ -1398,7 +1441,16 @@
             "metricName": "cpu_percent",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "CPU"
           }
@@ -1424,7 +1476,16 @@
             "metricName": "memory_percent",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "Memory"
           }
@@ -1450,7 +1511,16 @@
             "metricName": "storage_percent",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "Storage"
           }
@@ -1529,7 +1599,16 @@
             "metricName": "cpu_credits_remaining",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "credits left"
           }

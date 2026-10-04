@@ -132,7 +132,7 @@
       },
       {
         "name": "api starts",
-        "enable": true,
+        "enable": false,
         "hide": false,
         "iconColor": "#5794F2",
         "datasource": {
@@ -179,7 +179,7 @@
           "hide": false,
           "azureLogAnalytics": {
             "mode": "raw",
-            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app in (${app:singlequote}) and level in (${level:singlequote})\n| where isempty(${search:json}) or ResultDescription contains ${search:json}\n| summarize count() by bin(TimeGenerated, $__interval), level\n| order by TimeGenerated asc",
+            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app in (${app:singlequote}) and level in (${level:singlequote})\n| where isempty(\"${search}\") or ResultDescription contains \"${search}\"\n\n| summarize count() by bin(TimeGenerated, $__interval), level\n| order by TimeGenerated asc",
             "resources": [
               "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
             ],
@@ -208,7 +208,8 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.level}"
         },
         "overrides": [
           {
@@ -325,7 +326,7 @@
           "hide": false,
           "azureLogAnalytics": {
             "mode": "raw",
-            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app in (${app:singlequote}) and level in (${level:singlequote})\n| where isempty(${search:json}) or ResultDescription contains ${search:json}\n| project TimeGenerated, app, level, target, [\"kind\"] = job_kind, message = iff(level == \"TEXT\", trim(@\"\\s+\", ResultDescription), msg),\n    fields = iff(isnull(j), \"\", tostring(bag_remove_keys(j, dynamic([\"timestamp\", \"level\", \"message\", \"target\", \"spans\"]))))\n| order by TimeGenerated desc\n| take 1000",
+            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app in (${app:singlequote}) and level in (${level:singlequote})\n| where isempty(\"${search}\") or ResultDescription contains \"${search}\"\n\n| project TimeGenerated, app, level, target, [\"kind\"] = job_kind, message = iff(level == \"TEXT\", trim(@\"\\s+\", ResultDescription), msg),\n    fields = iff(isnull(j), \"\", tostring(bag_remove_keys(j, dynamic([\"timestamp\", \"level\", \"message\", \"target\", \"spans\"]))))\n| order by TimeGenerated desc\n| take 1000",
             "resources": [
               "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
             ],

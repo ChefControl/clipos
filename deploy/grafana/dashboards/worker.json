@@ -101,7 +101,7 @@
       },
       {
         "name": "api starts",
-        "enable": true,
+        "enable": false,
         "hide": false,
         "iconColor": "#5794F2",
         "datasource": {
@@ -610,7 +610,8 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.job_kind}"
         },
         "overrides": []
       },
@@ -680,7 +681,8 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.series}"
         },
         "overrides": []
       },
@@ -823,7 +825,7 @@
           }
         }
       ],
-      "description": "Transcode speed as a multiple of real time (higher is faster), and killfeed analysis seconds per sampled frame (lower is faster). One point per job.",
+      "description": "Transcode speed as a multiple of real time (higher is faster, left axis), and killfeed analysis seconds per sampled frame (lower is faster, right axis). One point per job.",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -847,7 +849,24 @@
           },
           "decimals": 2
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "analyse (s per frame)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
@@ -897,7 +916,16 @@
             "metricName": "MemoryWorkingSet",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "memory"
           }
@@ -923,7 +951,16 @@
             "metricName": "CpuTime",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "CPU seconds"
           }

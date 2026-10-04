@@ -101,7 +101,7 @@
       },
       {
         "name": "api starts",
-        "enable": true,
+        "enable": false,
         "hide": false,
         "iconColor": "#5794F2",
         "datasource": {
@@ -604,7 +604,8 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.route}"
         },
         "overrides": []
       },
@@ -678,9 +679,25 @@
           },
           "color": {
             "mode": "palette-classic"
-          }
+          },
+          "displayName": "${__field.labels.class}"
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "1xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",
@@ -862,7 +879,16 @@
             "metricName": "MemoryWorkingSet",
             "aggregation": "Average",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "memory"
           }
@@ -888,7 +914,16 @@
             "metricName": "CpuTime",
             "aggregation": "Total",
             "timeGrain": "auto",
-            "allowedTimeGrainsMs": [],
+            "allowedTimeGrainsMs": [
+              60000,
+              300000,
+              900000,
+              1800000,
+              3600000,
+              21600000,
+              43200000,
+              86400000
+            ],
             "dimensionFilters": [],
             "alias": "CPU seconds"
           }

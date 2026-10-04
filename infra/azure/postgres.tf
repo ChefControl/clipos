@@ -129,6 +129,16 @@ resource "azurerm_postgresql_flexible_server_configuration" "connection_throttle
   depends_on = [azurerm_postgresql_flexible_server_configuration.log_disconnections]
 }
 
+# Azure's "enhanced metrics" for database activity (commits, rollbacks, deadlocks, tuples),
+# which Grafana's Postgres panels show. Platform metrics, so free; applies without a restart.
+resource "azurerm_postgresql_flexible_server_configuration" "metrics_database_activity" {
+  name      = "metrics.collector_database_activity"
+  server_id = azurerm_postgresql_flexible_server.main.id
+  value     = "on"
+
+  depends_on = [azurerm_postgresql_flexible_server_configuration.connection_throttle]
+}
+
 # Mails ADMIN_EMAILS when logins keep failing (someone probing the server, or an app
 # whose identity lost its role). A platform metric, so it works even when the Log
 # Analytics daily cap has paused ingestion. Stateless: the metric has no data points at
