@@ -12,6 +12,7 @@ The app itself, everything inside `rg-clipos` (created empty by `infra/bootstrap
 | `crclipos<suffix>` | Container registry (Basic); the web apps pull with `AcrPull` |
 | `kv-clipos-<suffix>` | Key Vault, RBAC mode |
 | `log-clipos` | Log Analytics; App Service console/HTTP/platform logs and Postgres logs |
+| Alerts | `ag-clipos-admins` mails `ADMIN_EMAILS`: `clipos-postgres-failed-connections` (postgres.tf), `clipos-job-failures` and `clipos-api-5xx` (alerts.tf, log alerts over `log-clipos`; thresholds are variables) |
 | `clips.spawnpoint.run` | DNS zone, delegated from Namecheap |
 
 Applied from CI only: pull requests get a plan comment, and **Actions → Infra → Run workflow** (stack `azure`) on `main` applies.
