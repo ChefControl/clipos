@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import { useClip } from "../clips/hooks";
 import { useClipAnalysis } from "../clips/killfeed/analysis";
+import { KillCard } from "../kip/KillCard";
 import { Kip } from "../kip/Kip";
 import { Avatar } from "../ui/Avatar";
 import { Backdrop } from "../ui/Backdrop";
@@ -11,6 +12,7 @@ import { useToast } from "../ui/Toast";
 import { Between } from "./Between";
 import { HostAway } from "./HostAway";
 import { type Show, useShowActions } from "./hooks";
+import { CARD_OUTRO_MS, killCard } from "./killCard";
 import type { ClientMsg } from "./live";
 import { BANANA, FloatingReactions, ReactButton, RoundButton, useFloats } from "./Reactions";
 import { ShowHeader, type Tone } from "./ShowHeader";
@@ -96,6 +98,11 @@ export function Stage({
   const died = (analysis.data?.kills ?? []).some(
     (k) => k.owner === "myDeath" && k.t * 1000 <= positionMs,
   );
+  // Kip's kill card (S8): the uploader's kills, when they die in the clip, or for the clip's
+  // last few seconds; then it leaves. Every screen shows it at the same moment, since it
+  // goes by the room's position. No killfeed, no card.
+  const card = killCard(analysis.data ?? null, durationMs);
+  const cardOn = !!card && positionMs >= card.fromMs && positionMs < card.untilMs;
   const failMarked = !!clipId && show.failContenders.includes(clipId);
 
   // The clip before this one, for Up next's "Just played".
@@ -269,6 +276,13 @@ export function Stage({
                 muted
                 className="hidden"
                 data-testid="next-video"
+              />
+            )}
+            {cardOn && card && clipId && (
+              <KillCard
+                key={`${clipId}-${card.fromMs}`}
+                kills={card.kills}
+                leaving={positionMs >= card.untilMs - CARD_OUTRO_MS}
               />
             )}
             <FloatingReactions floats={floats} />
