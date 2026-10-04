@@ -8,7 +8,7 @@ One-time stack, applied **locally** by a subscription Owner. It creates:
 | `stclipostf<suffix>` / `tfstate` | OpenTofu state for all stacks. Entra-only auth, ZRS, versioning, 30-day soft delete |
 | `rg-clipos` | Empty resource group the app stack (`infra/azure`) fills |
 | `id-clipos-github-plan` | GitHub OIDC for `pull_request` jobs. Custom role `clipos plan reader` on `rg-clipos` (Reader plus `Microsoft.Web/sites/config/list/action`, which plans need to read web app settings) and **read only** on the state container, so plans run with `-lock=false`. `infra/azure` adds Key Vault Secrets User, which refreshing the invite-check secret needs |
-| `id-clipos-github-deploy` | GitHub OIDC for workflow runs on `main` (trusted by branch, not by a GitHub environment). Contributor on `rg-clipos`, plus RBAC Admin **restricted by condition** to 6 data-plane roles |
+| `id-clipos-github-deploy` | GitHub OIDC for workflow runs on `main` (trusted by branch, not by a GitHub environment). Contributor on `rg-clipos`, plus RBAC Admin **restricted by condition** to 6 data-plane roles and `Monitoring Reader` (for Grafana) |
 
 It also registers the resource providers clipos uses (only `Microsoft.AlertsManagement` was missing).
 

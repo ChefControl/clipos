@@ -14,6 +14,7 @@ locals {
     "4633458b-17de-408a-b874-0445c86b69e6", # Key Vault Secrets User
     "b86a8fe4-44ce-4948-aee5-eccb2c155cd7", # Key Vault Secrets Officer
     "7f951dda-4ed3-4680-a7ca-43fe172d538d", # AcrPull
+    "43d0d8ad-25c7-4714-9337-8ba259a9fe05", # Monitoring Reader (Grafana)
   ]
 
   github_oidc_issuer = "https://token.actions.githubusercontent.com"

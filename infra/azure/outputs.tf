@@ -43,3 +43,7 @@ output "invite_check_secret" {
   value       = random_password.invite_check.result
   sensitive   = true
 }
+
+output "grafana_url" {
+  value = "https://${local.grafana_host}"
+}

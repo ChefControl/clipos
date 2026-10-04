@@ -1,11 +1,11 @@
 name: Deploy
 
 # CD: every merge to main that touches the app, once the gate (gate.yml) confirms the pull
-# request's checks tested exactly this code: build both binaries and the SPA, push both
-# images to ACR, then roll both web apps to the new tag and wait until /healthz reports
-# it. Run workflow by hand skips the gate (an override). The database and its
-# login roles are set up by the Infra workflow (after an Azure apply); the api runs the
-# migrations itself at startup.
+# request's checks tested exactly this code: build both binaries and the SPA, push the
+# api, worker and Grafana images to ACR, then roll the web apps to the new tag and wait
+# until each reports it. Run workflow by hand skips the gate (an override). The database
+# and its login roles are set up by the Infra workflow (after an Azure apply); the api
+# runs the migrations itself at startup.
 on:
   push:
     branches: [main]
@@ -202,6 +202,21 @@ jobs:
           build-args: CLIPOS_VERSION=${{ github.sha }}
           cache-from: type=gha,scope=worker-runtime
           cache-to: type=gha,scope=worker-runtime
+      - name: grafana image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: .
+          file: deploy/grafana.Dockerfile
+          push: true
+          # As for the api.
+          provenance: false
+          tags: ${{ steps.acr.outputs.server }}/clipos-grafana:${{ github.sha }}
+          build-args: CLIPOS_VERSION=${{ github.sha }}
+          cache-from: type=gha,scope=grafana
+          cache-to: type=gha,scope=grafana
 
   release:
     needs: images
@@ -215,26 +230,38 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID_DEPLOY || vars.AZURE_CLIENT_ID_DEPLOY }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID || vars.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID || vars.AZURE_SUBSCRIPTION_ID }}
-      # Each web app's name and hostname are masked as soon as they're looked up.
-      - name: Point both web apps at the new images
+      # Each web app's name and hostname are masked as soon as they're looked up. An app the
+      # Infra workflow hasn't created yet (a new component merged with its infrastructure)
+      # is skipped; Run workflow rolls it out once it exists.
+      - name: Point the web apps at the new images
         run: |
           server=$(az acr list -g "$RESOURCE_GROUP" --query '[0].loginServer' -o tsv)
           echo "::add-mask::$server"
-          for component in api worker; do
+          for component in api worker grafana; do
             name=$(az webapp list -g "$RESOURCE_GROUP" --query "[?tags.component=='$component'].name | [0]" -o tsv)
+            if [ -z "$name" ]; then
+              echo "::warning::There's no ${component} web app yet, so it wasn't deployed. Run this workflow again once the Infra workflow has created it."
+              continue
+            fi
             echo "::add-mask::$name"
             az webapp config set -g "$RESOURCE_GROUP" -n "$name" -o none \
               --linux-fx-version "DOCKER|${server}/clipos-${component}:${GITHUB_SHA}"
           done
-      - name: Wait for /healthz to report this build
+      # Grafana has no /healthz; its image carries the version as a static file instead.
+      - name: Wait for each app to report this build
         run: |
-          for component in api worker; do
+          for component in api worker grafana; do
             host=$(az webapp list -g "$RESOURCE_GROUP" --query "[?tags.component=='$component'].defaultHostName | [0]" -o tsv)
+            [ -n "$host" ] || continue
             echo "::add-mask::$host"
-            echo "waiting for ${component}'s /healthz"
+            echo "waiting for ${component} to report the new version"
             for _ in $(seq 60); do
-              version=$(curl -fsS -o /dev/null -D - --max-time 10 "https://${host}/healthz" \
-                | tr -d '\r' | awk -F': ' 'tolower($1) == "x-clipos-version" { print $2 }') || true
+              if [ "$component" = grafana ]; then
+                version=$(curl -fsS --max-time 10 "https://${host}/public/clipos-version.txt") || true
+              else
+                version=$(curl -fsS -o /dev/null -D - --max-time 10 "https://${host}/healthz" \
+                  | tr -d '\r' | awk -F': ' 'tolower($1) == "x-clipos-version" { print $2 }') || true
+              fi
               if [ "$version" = "$GITHUB_SHA" ]; then
                 echo "${component} is serving ${GITHUB_SHA}"
                 continue 2
