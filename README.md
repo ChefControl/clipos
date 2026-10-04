@@ -55,7 +55,7 @@ skips what a change can't affect (changing the workflow runs everything), each g
 parallel:
 - tests with coverage: `rust-coverage` (nextest, against Postgres, Azurite, ffmpeg and ONNX Runtime) and
   `web-coverage`, which adds up `web-unit` (Vitest) and the browser tests, one job per device side by side
-  (`web-e2e`: iphone, android, pc); below 95 % of lines fails;
+  (`web-e2e`: iphone, android, and pc in two shards); below 95 % of lines fails;
 - checks: Rust fmt/clippy, `cargo deny`, the web's generated-types freshness, lint, audit, typecheck and build,
   the Auth0 action tests and `tofu fmt`.
 
