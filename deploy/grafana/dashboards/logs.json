@@ -129,34 +129,6 @@
           "type": "grafana",
           "uid": "-- Grafana --"
         }
-      },
-      {
-        "name": "api starts",
-        "enable": false,
-        "hide": false,
-        "iconColor": "#5794F2",
-        "datasource": {
-          "type": "grafana-azure-monitor-datasource",
-          "uid": "azure-monitor"
-        },
-        "target": {
-          "refId": "Anno",
-          "datasource": {
-            "type": "grafana-azure-monitor-datasource",
-            "uid": "azure-monitor"
-          },
-          "queryType": "Azure Log Analytics",
-          "hide": false,
-          "azureLogAnalytics": {
-            "mode": "raw",
-            "query": "AppServiceConsoleLogs\n| where $__timeFilter(TimeGenerated)\n| extend app = extract(@\"/sites/clipos-([a-z]+)-\", 1, _ResourceId)\n| extend j = parse_json(extract(@\"(\\{.*\\})\", 1, ResultDescription))\n| extend level = iff(isnull(j), \"TEXT\", tostring(j.level)), msg = tostring(j.message), target = tostring(j.target), job_kind = tostring(j.spans[0].kind)\n| where app == \"api\" and msg == \"listening\"\n| project TimeGenerated, text = strcat(\"api started: \", substring(tostring(j.version), 0, 7))",
-            "resources": [
-              "/subscriptions/$sub/resourceGroups/rg-clipos/providers/Microsoft.OperationalInsights/workspaces/log-clipos"
-            ],
-            "resultFormat": "table",
-            "dashboardTime": false
-          }
-        }
       }
     ]
   },
