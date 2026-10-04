@@ -438,6 +438,120 @@ Order: S1 → S2 → S4 → S3 → S5 → S6 → S7, then S8 and S9 (S9's show p
 #### Epic 2 · Phone
 The canvas's phone boards: the show pad with the reaction sheet (2.3), hosting from a phone (2.2), the lobby and its scrolled end, and phone versions of every other screen; show links stop saying "Open this on a PC". To be broken down after Epic 1.
 
+### Infra: on-demand worker (settled 2026-10-03, revised 2026-10-04)
+Follow-up to the 2026-10-03 cost audit. The api and worker share one App Service plan sized for the worker's worst case: on P1v3 the plan averaged 3–6% CPU while the worker used 12–22 CPU-minutes a day. Decision 45 cut the plan to B2 as a stopgap (~$60/month, but jobs 2–2.6× slower than on P1v3). This epic gives each part its own size: the **api** alone on App Service **B1**; the **worker** on **Azure Container Instances (16 vCPU / 32 GB)**, started only when there's work; a small **orchestrator** (a TypeScript Azure Function on Flex Consumption) that starts and stops it; and **Postgres with private access only**, so the database has no public endpoint. Container Apps would do the worker part natively (KEDA, `replicaTimeout`) but isn't offered in Israel Central yet (checked 2026-10-03); the worker moves there when it is (roadmap).
+
+Revised on 2026-10-04 after the repository went public and the hardening that came with it. With the infrastructure code public, the database's network exposure matters more, and today's firewall admits outbound IPs shared with other apps on the App Service stamp. So decision 46 makes Postgres private instead of opening it to all Azure services. The hardening already added the failed-login alert, connection throttling and the `ag-clipos-admins` action group, which this epic reuses. It also narrowed the worker's storage roles to one container each, which the ACI worker's identity has to match. Automatic infra applies now refuse destroys, so the database migration runs by hand. The upload page queues several files. And a worker given SIGTERM now hands its job back within 90 s, which shapes how the worker is stopped.
+
+```mermaid
+flowchart LR
+  SPA[Browser SPA]
+  subgraph IL["Azure — Israel Central (rg-clipos)"]
+    subgraph VNET["VNet: each service in its own private subnet"]
+      API["api — App Service B1<br/>VNet integration (outbound)"]
+      FN["orchestrator<br/>Azure Function, Flex, TypeScript<br/>15 s timer"]
+      WRK["worker — ACI 16 vCPU<br/>started on demand, exits when idle"]
+      PG[(Postgres B1ms<br/>private access only)]
+    end
+    ARM[Azure control plane]
+    ST[(Storage)]
+    ACR[ACR Basic]
+  end
+  SPA -- "HTTPS (public front end)" --> API
+  SPA -- "SAS upload, playback" --> ST
+  API -- "insert jobs" --> PG
+  FN -- "due work? (read-only)" --> PG
+  FN -- "start / stop (custom role)" --> ARM
+  ARM --> WRK
+  WRK -- "claim jobs" --> PG
+  WRK -- "service endpoint" --> ST
+  ACR -- "image pull" --> WRK
+```
+
+**Measured in two spikes (2026-10-03, all resources deleted afterwards):**
+
+| 40 s 1280×960 120 fps clip | Transcode | Analysis | Total |
+|---|---|---|---|
+| P1v3, 2 threads (production before decision 45) | 71 s | 108.5 s | ~180 s |
+| ACI 4 vCPU, 2 threads | 42 s | 58 s | 100 s |
+| ACI 8 vCPU, 8 threads | 19 s | 39 s | 58 s |
+| **ACI 16 vCPU** (ffmpeg 16 threads, models 8) | **10 s** | **18 s** | **28 s** |
+
+- Same production code (`ffmpeg_args`, `read_killfeed`) and identical kill counts. ACI hosts were AMD EPYC 7763, about 1.7× P1v3 per thread; containers see one CPU fewer than requested (3/7/15). Model threads stop helping at about 8 (16 was slower), so ONNX Runtime gets half the cores.
+- Cold start with the 217 MB worker image: ~30 s (6 s provisioning, 15–16 s pull, ~8 s start); 14 s when the host had the image cached; 58 s once. Restarting a stopped group pulls again (33–43 s).
+- In private subnets (no default outbound access), a VNet-integrated Flex function reached ARM, a Postgres private endpoint, blob storage over a service endpoint and the internet, with no NAT gateway; its 15 s timer fired on schedule; read/start/stop on the container group needed only those three actions. ACI in a private subnet pulled from ACR and got managed-identity tokens for storage and Postgres.
+
+**Cost** (Israel Central list prices, 100 clips a month): Postgres $21.33 · ACR $5.07 · storage and egress ~$3 · Log Analytics, DNS, Key Vault ~$1.30 · api on B1 $14.45 · worker ~$6.10 · orchestrator $0 plus ~$1.30 for its storage and logs · private DNS zone for Postgres $0.50 · alerts ~$0.30 → **≈ $53/month** (≈ $61 at 300 clips, ≈ $89 at 1,000; B2 today ≈ $60, B3 ≈ $88, P1v3 was ≈ $140). The worker costs about 4 cents an upload (24 s pull and start, ~34 s work, 60 s idle grace, at $1.13/hour). The orchestrator is free at a 15 s tick: 175k one-second runs × 0.5 GB stay inside Flex's monthly free grant, whereas a 5 s tick would be ~$6/month because every run bills at least 1 s.
+
+**How it works (rules):**
+- **One container drains the queue** (decision 47): a single named container group, so there's never more than one worker. A start serves every job queued while it runs (an upload's `transcode`, then its `analyse`, and anything else due).
+- **The orchestrator decides, the services don't** (decision 48): the api only inserts jobs, as today, and has no Azure rights over the worker. Every 15 s the orchestrator asks Postgres whether work is due (claimable jobs, delayed jobs now due, stale-locked jobs; after W6 also upload intents and uploads in flight) and starts the group if it's stopped. It stops a group that has run for over 90 minutes, or for 30 minutes without finishing a job. Lock age can't show progress, because a running job's lock is refreshed every 3 minutes whatever it's doing.
+- **The worker turns itself off** (decision 49): it exits 0 after 60 s with nothing to claim. The restart policy is `OnFailure`, so a crash restarts in place, but a clean exit stops the group and its billing.
+- **Run-time limits in layers**, because ACI has no max-run-time setting (decision 49):
+  1. After 60 minutes the worker finishes its job and exits.
+  2. The entrypoint wraps it in `timeout --kill-after=120s 75m` and maps the timeout's exit 124 to 0, so `OnFailure` doesn't restart it. `timeout` sends SIGTERM first, and the 120 s outlasts the worker's 90 s shutdown grace (`SHUTDOWN_GRACE_SECS`), so the job is handed back to the queue rather than killed.
+  3. The orchestrator's 90-minute stop.
+  4. The $75 budget.
+
+  A crash-loop breaker in the entrypoint (a start counter on an `emptyDir` volume; exit 0 after 5 starts in 10 minutes without a finished job) stops the most likely runaway without the orchestrator.
+- **Probes:** a liveness probe on job progress, not `/healthz`: a database blip shouldn't kill a running transcode, and a stuck ffmpeg still answers `/healthz` (and still refreshes its job's lock). No readiness probe, since the worker takes no traffic.
+- **Maintenance stays with the worker** (decision 50): a stopping worker already hands its job back (`jobs::release`, no attempt used). A worker that was killed outright leaves its job running, so on start the worker requeues anything still locked (with one worker, it was orphaned), counting the attempt as the reaper does, and it keeps its 60 s reaper while running. The hourly janitor becomes a daily `janitor` job that reschedules itself, so an idle day costs one short start instead of 24.
+- **Postgres is private** (decision 46): only the VNet reaches it. The api, the orchestrator and the worker each sit in their own private subnet. Database chores that used to run from a GitHub runner or your laptop run from a short-lived container in the VNet instead: the role bootstrap after an apply, and `psql`. A self-hosted runner in the VNet is out: on a public repo it's an attack surface for nothing.
+- **Stable identities** (decision 52): the api, the worker and the orchestrator use user-assigned identities created by OpenTofu, so their object IDs never change. The ACI worker reuses the worker's identity and Postgres role, and the bootstrap has nothing to do after the first run.
+
+**W1 — Private network and Postgres migration** (decisions 46, 52; the old server goes by hand, since automatic applies refuse destroys)
+- [ ] VNet with private subnets (no default outbound access): `snet-app` (delegated to `Microsoft.Web/serverFarms`, the plan's VNet integration), `snet-func` (`Microsoft.App/environments`), `snet-jobs` (`Microsoft.ContainerInstance/containerGroups`, for the worker and the chore containers, with a `Microsoft.Storage` service endpoint) and `snet-db` (`Microsoft.DBforPostgreSQL/flexibleServers`). Plus a private DNS zone `*.private.postgres.database.azure.com` linked to the VNet. No NAT gateway, which the spike showed isn't needed.
+- [ ] User-assigned identities for the api and the worker, with the same roles as today's system-assigned ones (the worker's per-container set). `core::azure` asks for the user-assigned identity by client ID.
+- [ ] A new server with private access in `snet-db`, otherwise as today: B1ms, PG 17, Entra-only, the two Entra admins, the log settings, connection throttling, the diagnostic setting, and the failed-connections alert moved to it. The api's plan gets VNet integration into `snet-app`, without route-all, so only private addresses go through the VNet.
+- [ ] `infra.yml`: replace "open the firewall to the runner, run `bootstrap.sh`, close it" with a short-lived container in `snet-jobs`. It runs as the deploy identity, prints its output and is deleted. `deploy/db/psql.sh` does the same for your interactive `psql`, with your Entra token passed as a secure variable.
+- [ ] Cutover in a short window: stop the worker; dump the old database through the admin IP rule; restore inside the VNet so `clipos-api` still owns the tables; point `DATABASE_URL` at the new server; start; check uploads and shows. Keep the old server stopped for a week, then delete it with a manual run.
+- [ ] Remove the firewall machinery that's no longer needed: the rules built from the web apps' `possible_outbound_ip_address_list`, their data sources and the README's "second apply" note.
+- **Exit:** the old server is gone. Nothing outside the VNet can open a connection to Postgres. The bootstrap and `psql.sh` work from the VNet.
+
+**W2 — Worker: on-demand mode** (code only; App Service keeps today's behaviour with the new settings off)
+- [ ] `IDLE_EXIT_SECS` (exit 0 after that long with nothing claimable) and `MAX_LIFETIME_SECS` (finish the current job, then exit 0) in `crates/worker/src/config.rs` / `service.rs`.
+- [ ] On start, requeue orphaned jobs before claiming: every running job, whatever its lock age, counting the attempt as the reaper does (a job handed back on SIGTERM is already queued). The 60 s reaper loop stays.
+- [ ] `janitor` job kind (`core::clips`), daily via `jobs::enqueue_later`, seeded by a migration and re-enqueued by each run; remove the hourly loop.
+- [ ] A wall-clock limit on transcodes, like analysis's `time_limit`. The output is already capped at 307 s by `-t`, but a stalled read isn't.
+- [ ] `/livez` for the liveness probe: 503 when the job loop hasn't ticked, or ffmpeg hasn't reported progress, for 5 minutes. Deliberately not the lock heartbeat, which keeps beating while ffmpeg is stuck.
+- [ ] Threads from `available_parallelism()` when unset: ffmpeg all of them, ONNX Runtime half.
+- **Exit:** tests for idle exit, max lifetime, startup requeue, the janitor job and `/livez`; the App Service worker unchanged in production.
+
+**W3 — Orchestrator function** (new `orchestrator/`, TypeScript, Azure Functions v4 on Flex Consumption, Node 22)
+- [ ] A 15 s timer: read the container group (ARM), ask Postgres for due work, start or stop by the rules above; log one line per decision.
+- [ ] A user-assigned identity. Postgres role `clipos-orchestrator`: its login comes from the bootstrap, and its `SELECT` on `jobs` is granted by the api at startup, next to the worker's grants, because the api owns the tables.
+- [ ] Custom role "clipos worker operator" (`Microsoft.ContainerInstance/containerGroups/read`, `/start/action`, `/stop/action`) on the one container group. Defined and assigned in `infra/bootstrap`, since CI may only assign the built-in roles in its RBAC condition (you apply it locally).
+- [ ] `infra/azure`: Flex app (512 MB, max 1 instance) with VNet integration into `snet-func`, its storage account with identity-based `AzureWebJobsStorage`, logs to `log-clipos`. No secrets in its settings. Deployed as a zip from `deploy.yml` when `orchestrator/` changes, after `gate.yml` like the app.
+- [ ] vitest unit tests with ARM and Postgres mocked: start on due work, no-op when running, stop on the 90-minute and 30-minute rules.
+- **Exit:** deployed with starting turned off (`ORCHESTRATOR_ENABLED=false`) and logging what it would do.
+
+**W4 — Worker on ACI**
+- [ ] First, three short checks on a throwaway group:
+  - a failed liveness probe under `OnFailure` restarts in place;
+  - `emptyDir` data survives a crash restart (the breaker depends on it; if not, the counter goes in Postgres);
+  - what ACI's stop and a definition update send to the container, and how long they wait before the kill. If there's no SIGTERM grace, deploys only update a stopped group, and the orchestrator's stop is kept for runaways.
+- [ ] ACI standard-core quota in Israel Central from 20 to 32 (one 16 vCPU worker plus spare for chore containers, deploys and tests).
+- [ ] `infra/azure`: container group `clipos-worker-aci` in `snet-jobs` (16 vCPU / 32 GB, Linux, `OnFailure`, the worker's user-assigned identity, which also gets `AcrPull`). Its settings are today's plus the W2 ones. It gets the liveness probe, and the entrypoint script (timeout, exit-code mapping, crash-loop breaker) goes in `deploy/worker.Dockerfile`.
+- [ ] `deploy.yml`: after pushing the image, update the container group's image while it's stopped. If it's running, the update restarts it and the interrupted job is requeued on the next start.
+- [ ] Alerts to `ag-clipos-admins`: orchestrator heartbeat (no successful run in 10 minutes) and worker running over 2 hours (`CpuUsage` reported continuously).
+- **Exit:** a manual start processes a real upload end to end; idle exit stops billing; the 75-minute timeout and the breaker tested once each.
+
+**W5 — Cut over**
+- [ ] Turn on the orchestrator; stop the App Service worker (`clipos-worker` kept a week behind `worker_on_app_service` for rollback); plan B2 → B1.
+- [ ] Watch for a week: upload-to-analysed times, cold starts, Cost Management by meter, memory on B1.
+- [ ] Then remove the App Service worker from `infra/azure` and `deploy.yml`.
+- **Exit:** a week of uploads processed by ACI; the monthly forecast near the estimate; the rollback flag deleted.
+
+**W6 — Prewarm on the picker** (after W5; decision 51)
+- [ ] Clicking "Choose a video" sends `POST /api/uploads/intent` (`fetch` with `keepalive`, rate-limited per user): an `upload_intents` row expiring 60 s later, refreshed on another click. The file input's `cancel` event deletes it. Picking one file or several starts the upload or the queue as today.
+- [ ] Orchestrator: due work also counts unexpired intents and uploads in flight. An upload is in flight while its clip is `uploading`, until a deadline of start + announced size ÷ 1 MB/s + 60 s, at most 10 minutes. A queue uploads one file after another, so its next file keeps the worker up while each finished file's jobs run.
+- [ ] Worker: the idle exit waits for the same intents and uploads, and loads both models and their ONNX Runtime sessions while it waits.
+- [ ] Playwright: click → intent, cancel → deleted, a queue of three keeps one worker start; a unit test for the deadline.
+- **Exit:** a typical upload finds the worker already running when it completes.
+
+**W7 — Docs**
+- [ ] §1 architecture, §6 resource table and cost line, §7 (the bootstrap container), §11 risks, `infra/azure/README.md`.
+
 ---
 
 ## 10. Roadmap (after launch)
@@ -447,6 +561,8 @@ The canvas's phone boards: the show pad with the reaction sheet (2.3), hosting f
 - Per-user stat pages built on analysis results (e.g. smoke kills this month).
 - Demo (`.dem`) analysis via `demoparser2`, only if demos ever become available.
 - Second game: new `games` row + new `analysis-<game>` crate.
+- Container Apps in Israel Central: move the worker to a Container Apps job (KEDA PostgreSQL scaler on `jobs`, native `replicaTimeout`) and retire the orchestrator function and the run-time layers it replaces.
+- Public images on GHCR instead of ACR (free for a public repo, saves ~$5/month and the `AcrPull` roles). But every worker start would pull from GitHub instead of from inside the region: measure ACI's pull time from `ghcr.io` against ACR's 15–16 s, and weigh GitHub outages blocking uploads, before switching.
 
 ---
 
@@ -455,9 +571,12 @@ The canvas's phone boards: the show pad with the reaction sheet (2.3), hosting f
 | Risk | Mitigation |
 |---|---|
 | App Service container temp disk is too small for the transcode output of large clips | Phase 4 spike measures it. Fallback: mount an Azure Files share at `/scratch`, or stream fragmented MP4 and remux with faststart in a second pass |
-| A transcode slows down the API on the shared plan | `-threads 1` + `nice`; if it's still noticeable, move `worker` to its own plan (one tofu change) |
+| A transcode slows down the API on the shared plan | `nice` and few threads today; the on-demand worker epic (W5) moves the worker off the plan entirely |
 | HEVC/AV1 or odd containers from some recorders | The transcode always normalises to H.264; `ffprobe` rejects anything without a decodable video stream, with a clear error |
-| Postgres reachable over a public endpoint | Firewall limited to the App Service's outbound IPs + Entra-only auth (decision 19). Upgrade path: VNet integration with a delegated subnet + private DNS zone |
+| Postgres reachable over a public endpoint | Today: firewall limited to the App Service's outbound IPs (shared with other apps on the stamp) + Entra-only auth (decision 19), connection throttling and a failed-login alert. After W1: private access only, with no public endpoint (decision 46) |
+| The private network relies on behaviour Azure doesn't document | No NAT gateway was needed in the spike: Flex and ACI reached Azure's services from private subnets. A NAT gateway (~$33/month) is the fallback |
+| Admin access to a private database | No more `psql` from your laptop: `deploy/db/psql.sh` runs it in a short-lived container in the VNet. The bootstrap runs the same way from `infra.yml` |
+| ACI cold starts | Measured ~30 s, sometimes ~60 s; W6's prewarm hides most of it behind the file dialog and the upload |
 | Auth0 free-plan limits change | 7 users is nowhere near any limit; the auth code only depends on OIDC/JWT, so switching providers is contained |
 | Killfeed CV accuracy across HUD setups | Test set, shadow mode, correction loop, ONNX fallback |
 
@@ -485,7 +604,7 @@ The canvas's phone boards: the show pad with the reaction sheet (2.3), hosting f
 | 16 | Killfeed: auto-adapt per clip, anchored top-right; own kills = highlighted rows; name OCR on the roadmap | 4:3 stretched + 16:9 1080p/1440p in the group; clips are usually from the uploader's own view (`my_pov` flag) |
 | 17 | Analysis is **the last phase**; you generate the reference clips yourself | Get the platform running first |
 | 18 | An earlier project's infrastructure in the same subscription is torn down by hand, from a checklist | Irreversible, so not automated |
-| 19 | Postgres networking: **public endpoint + firewall limited to App Service outbound IPs**, Entra-only auth; your IP added temporarily for `psql`. No VNet for now | Simple, ~free, and `psql` from your laptop stays easy; VNet integration remains the upgrade path if the DB should never be internet-reachable |
+| 19 | Postgres networking: **public endpoint + firewall limited to App Service outbound IPs**, Entra-only auth; your IP added temporarily for `psql`. No VNet for now Superseded by decision 46 once W1 lands. | Simple, ~free, and `psql` from your laptop stays easy; VNet integration remains the upgrade path if the DB should never be internet-reachable |
 | 20 | Database engine: **Azure Database for PostgreSQL Flexible Server** (not Azure SQL Database) | sqlx dropped SQL Server; the code, `SKIP LOCKED` queue, `jsonb` and local `postgres:17` dev all depend on Postgres. Azure SQL's free tier would save ~$15/month at the cost of a data-layer rewrite |
 | 21 | Repo is **private on GitHub Free**; deploy identity trusts `main`, `tofu apply` only via manual dispatch (since 2026-10-03: automatic after a gated merge, destroys still manual); OIDC subjects use GitHub's ID-based format (`repo:ChefControl@75704012/clipos@1398714690:…`) | Private wanted; Free has no environments; GitHub changed the subject claim format |
 | 22 | Blob Storage through **our own SAS signing** over REST (`core::storage`), no Azure SDK; the api, the worker and the browser all use one-blob SAS URLs | The Rust Azure SDK is still churning; a user delegation SAS is ~100 lines of HMAC; one code path works for Azurite (shared key) and Azure (user delegation key) |
@@ -511,4 +630,11 @@ The canvas's phone boards: the show pad with the reaction sheet (2.3), hosting f
 | 42 | **Others' unfinished clips are private** (decided 2026-10-03): a clip that's processing or failed is a 404 for everyone but its uploader and admins (the clip, its download, analysis and reactions); the feed already left them out | There's nothing to watch yet, and a failed upload is the uploader's business |
 | 43 | **Vote counts stay hidden until the show ends** (decided 2026-10-03): during the finale `ShowView` has only who has voted in each category (`voters`) and your own votes; `votes` fills in once the show has ended | The reveal is the point of the finale; counts in every show response spoiled it for anyone reading the API |
 | 44 | **A disabled host stays host** (considered 2026-10-03, kept): disabling the host doesn't hand the show over; "Take over as host" once the host has been away is the only way out | The live room already closes a disabled user's connection, so the host goes away and the takeover timer starts; a second way would only add cases |
-| 45 | **App Service plan B2, not P1v3** (cost audit 2026-10-03): the plan averaged 3–6% CPU, the api peaked at 111 MB and the worker at 1.3 GB, so P1v3 was ~4× too big for 78% of the bill. B3 (same compute as P1v3, 7 GB) is the fallback if memory stays above 85% or jobs get too slow. A scale-to-zero worker waits for Container Apps in Israel Central: ACI works today but its changing outbound IPs need a Postgres private endpoint, which leaves only ~$4 a month on top of B2 | Saves ~$80 of ~$140 a month with a one-line change; jobs may take up to ~2× longer, and uploads default to waiting for the show anyway |
+| 45 | **App Service plan B2, not P1v3** (cost audit 2026-10-03): the plan averaged 3–6% CPU, the api peaked at 111 MB and the worker at 1.3 GB, so P1v3 was ~4× too big for 78% of the bill. B3 (same compute as P1v3, 7 GB) is the fallback if memory stays above 85% or jobs get too slow. B2 is the stopgap until the on-demand worker epic (decisions 46–52), which moves the worker to ACI after all | Saves ~$80 of ~$140 a month with a one-line change; jobs may take up to ~2× longer, and uploads default to waiting for the show anyway |
+| 46 | **Postgres gets private access only** (decided 2026-10-04): a new server in its own subnet with no public endpoint, replacing decision 19's firewall. The api, orchestrator and worker reach it from their own private subnets; database chores (the bootstrap, `psql`) run from short-lived containers in the VNet | The repository is public, so the infrastructure code describes exactly what's exposed. Today's firewall admits outbound IPs shared with other apps on the App Service stamp. And platform bugs like 2022's ExtraReplica bypassed every firewall rule of public-access servers; only private-access servers were immune. Costs $0.50/month (the private DNS zone). Rejected: allowing all Azure services (CIS Azure benchmark and Defender for Cloud flag it; it leaves authentication as the only defence) and a private endpoint on the current server ($7.80/month, keeps the public endpoint). Private access can only be chosen when a server is created, so it means one migration |
+| 47 | **Worker on ACI, started on demand: 16 vCPU, one container drains the queue** (decided 2026-10-03); the api alone on App Service B1 | Pay for compute only while jobs run. 16 vCPU did the 40 s test clip in 28 s against 180 s on P1v3, for about 4 cents an upload. One container instead of one per job means one cold start per upload, not two, and fits the 20-core quota |
+| 48 | **The orchestrator is its own service: a TypeScript Azure Function on Flex Consumption**, not the api (decided 2026-10-03) | App services don't orchestrate infrastructure: the api gets no Azure rights over the worker. Flex is free at a 15 s tick and runs in Israel Central; TypeScript because it's a small "query, decide, call ARM" loop |
+| 49 | **Worker lifecycle and limits** (decided 2026-10-03): idle exit after 60 s; restart policy `OnFailure`; liveness probe on job progress, no readiness probe; run-time limits in layers (60 min graceful, 75 min `timeout`, 90 min orchestrator stop, budget) plus a crash-loop breaker and two alerts | ACI has no max-run-time setting and ignores liveness under `Never`. `/healthz` checks the database, which would kill healthy transcodes and miss a stuck ffmpeg. A crash loop resets every in-process limit, so it gets its own breaker |
+| 50 | **Maintenance stays with the worker** (decided 2026-10-03): requeue orphaned jobs on start; the janitor becomes a daily self-rescheduling job | Keeps domain work out of the orchestrator. Daily instead of hourly because each start of a 16 vCPU worker costs real money (hourly ≈ $14/month just for cleanup) |
+| 51 | **Prewarm on the picker click** (decided 2026-10-03, after the epic's first version): an upload intent that expires after 60 s, withdrawn by the file input's `cancel` event; uploads in flight, including a queue's next file, hold the worker until a size-based deadline (max 10 min) | Hides the ~30 s cold start behind the time spent in the file dialog and the upload. Intents are domain facts the orchestrator reads, so the api still never wakes the worker. A false start costs about 3 cents |
+| 52 | **User-assigned identities for the api, worker and orchestrator** (decided 2026-10-04), created by OpenTofu; the ACI worker reuses the worker's | System-assigned identities change when an app is recreated, and every change needs the bootstrap to re-point a Postgres role, which now has to run inside the VNet. With stable object IDs the bootstrap only has work for a new server or a new service, and the cutover from App Service to ACI keeps the worker's Postgres role |
