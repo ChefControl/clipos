@@ -187,7 +187,7 @@ All in resource group `rg-clipos`, region `israelcentral`.
 | ACR | Basic; `AcrPull` for both web apps' MIs |
 | DNS zone | `clips.spawnpoint.run` — A record + `asuid` TXT for App Service domain verification |
 | Log Analytics + diagnostic settings | App Service console logs, Postgres logs (connection lines on, since only they carry a failed login's client address; disconnection lines off); 30-day retention, 0.1 GB daily cap |
-| Action group + alerts | `ag-clipos-admins` mails `ADMIN_EMAILS`. `clipos-postgres-failed-connections`: more than 10 failed Postgres logins in 15 minutes (a platform metric, so it still fires when the Log Analytics cap pauses ingestion). Still to add (phase 7): worker job failures, 5xx rate, Postgres CPU/storage. Dashboards: Grafana (above) |
+| Action group + alerts | `ag-clipos-admins` mails `ADMIN_EMAILS`. `clipos-postgres-failed-connections`: more than 10 failed Postgres logins in 15 minutes (a platform metric, so it still fires when the Log Analytics cap pauses ingestion). `clipos-job-failures` (log alert): a job gave up, or 3+ failed attempts in an hour. `clipos-api-5xx` (log alert): 5+ server errors in 15 minutes, the front end's 503s while the container is down included. Both stateful (one mail when it starts, one when it resolves) and blind while the Log Analytics cap pauses ingestion. Still to add: Postgres CPU/storage. Dashboards: Grafana (above) |
 | Budget | `clipos-monthly` on `rg-clipos`, $75: mails at 80% and 100% actual and 100% forecast |
 | ACR task | `purge-old-tags`, weekly: keeps the last 10 tags per image |
 
@@ -377,7 +377,8 @@ Rules over it: side = the emblem's majority; won/lost = the banner; clutch = ali
 
 ### Phase 7 — Hardening & launch
 - [x] Dashboards: Grafana at `grafana.clips.spawnpoint.run` (decision 47) with five dashboards (overview, api, worker, infrastructure, logs), all from data already collected.
-- [ ] Alerts, Postgres restore drill (PITR to a scratch server), blob soft-delete restore drill.
+- [x] Alerts on job failures and api 5xx (`infra/azure/alerts.tf`), mailed to `ADMIN_EMAILS`.
+- [ ] Postgres CPU/storage alerts, Postgres restore drill (PITR to a scratch server), blob soft-delete restore drill.
 - [ ] Security pass: SAS scopes/expiry, CORS, internal endpoint secret. (Headers — CSP, HSTS, nosniff, referrer and permissions policies — and the dependency audits, `cargo deny` and `pnpm audit`, were done in S1.)
 - [ ] Invite everyone. 🎉
 - [ ] **Old infrastructure teardown:** finish removing an earlier project's leftovers by hand (the checklist is kept outside this repo).
