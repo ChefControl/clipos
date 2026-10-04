@@ -225,8 +225,8 @@ jobs:
           retention-days: 1
 
   # The browser regression tests, one job per device, side by side: an iPhone (WebKit), an
-  # Android phone (Chromium) and a 1440 px desktop Chrome (pc), against the instrumented
-  # build (API mocked), each using every core. Each maps its coverage back to the source
+  # Android phone (Chromium) and a 1440 px desktop Chrome (pc, which has most of the tests,
+  # split in two), against the instrumented build (API mocked), each using every core. Each maps its coverage back to the source
   # for web-coverage. Playwright's own image has the browsers and their system packages;
   # its tag follows the lockfile's @playwright/test, so the two always match (which is why
   # it isn't pinned by digest like the other images).
@@ -236,11 +236,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    name: web-e2e (${{ matrix.label }})
     strategy:
       # Each device is its own gate: one failing doesn't stop the others.
       fail-fast: false
       matrix:
-        device: [iphone, android, pc]
+        include:
+          - { label: iphone, device: iphone, shard: 1/1 }
+          - { label: android, device: android, shard: 1/1 }
+          - { label: pc-1, device: pc, shard: 1/2 }
+          - { label: pc-2, device: pc, shard: 2/2 }
     container:
       image: mcr.microsoft.com/playwright:v${{ needs.changes.outputs.playwright }}-noble
       options: --ipc=host
@@ -250,6 +255,8 @@ jobs:
     env:
       COVERAGE: "1"
       DEVICE: ${{ matrix.device }}
+      SHARD: ${{ matrix.shard }}
+      LABEL: ${{ matrix.label }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -264,18 +271,18 @@ jobs:
           cache-dependency-path: web/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - name: Browser tests
-        run: pnpm playwright test --project "$DEVICE"
+        run: pnpm playwright test --project "$DEVICE" --shard "$SHARD"
       - name: Map the coverage back to the source
-        run: node e2e/remap-coverage.mjs .nyc_output "coverage/merged/e2e-$DEVICE.json"
+        run: node e2e/remap-coverage.mjs .nyc_output "coverage/merged/e2e-$LABEL.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-e2e-${{ matrix.device }}
+          name: coverage-e2e-${{ matrix.label }}
           path: web/coverage/merged/
           retention-days: 1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: screenshots-${{ matrix.device }}
+          name: screenshots-${{ matrix.label }}
           path: web/playwright-report/
           retention-days: 14
 
