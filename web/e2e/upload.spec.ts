@@ -129,7 +129,9 @@ test("progress shows the speed and the time left", async ({ page }) => {
   );
   await pick(page, video("long.mp4", 2 * BLOCK));
   const progress = page.getByRole("progressbar", { name: "Upload" });
-  await expect(progress).toHaveAttribute("aria-valuenow", "50");
+  // The 8 MB block goes through Playwright's routing, which takes a while when every core
+  // is running tests (CI runs one worker per core).
+  await expect(progress).toHaveAttribute("aria-valuenow", "50", { timeout: 20_000 });
   // No time has passed: no speed yet.
   const line = progress.locator("xpath=following-sibling::p");
   await expect(line).toHaveText("50% · 8.0 MB of 16.0 MB");
