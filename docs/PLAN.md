@@ -315,6 +315,64 @@ Found on a phone (iPhone Safari, 2026-10-01): the clip page and header break at 
 - [ ] **Next training round:** much fainter rows in the generator, 16–32 data workers and validation every 5 rounds.
 - [x] **Faster CI and builds:** CI took 2.5–3 min on every change and Deploy 7–9 min, nearly all of it each image compiling every Rust dependency from scratch. Now Deploy builds both binaries and the SPA once on the runner with warm caches and the images only copy them in (the Dockerfiles still build from source locally), and the database bootstrap moved to the Infra workflow (after each Azure apply), where the apps' identities can actually change; it now also re-points existing roles at recreated identities. CI skips the jobs a change can't affect (docs or infra changes skip Rust and the browsers), overlaps Postgres, Azurite and ffmpeg with compiling the tests, and runs the phone tests in Playwright's image, one job per phone: **116 s** with warm caches for a change that runs everything (was ~180 s), seconds for docs.
 
+### Phase 9 — HUD analyzer v1 (decided 2026-10-04, decision 46)
+One model finds every element of CS2's HUD, small readers read what it finds, and the `analyse` job turns that into a **HUD timeline**: one record per sampled second. Each product feature is then a rule over the timeline instead of a detector of its own. It replaces the separate detectors first planned for the player's side, won/lost, players alive, player names and who recorded the clip.
+
+**The 18 elements** (all in v1), with how each is read and what it feeds:
+
+| # | Element | Read with | Feeds |
+|---|---|---|---|
+| 1 | Radar | locator box only in v1 | map (later), game mode (hostage markers) |
+| 2 | Location name | OCR | where the player is, map |
+| 3 | Hostages left | icon count | game mode, round state |
+| 4 | Own team portraits | colour vs greyed, per slot | who is alive |
+| 5 | Timer | OCR | round time, timing of events |
+| 6 | Score | OCR | round number, match state |
+| 7 | Alive counts (under the score) | OCR | players alive, clutches |
+| 8 | Enemy portraits | colour vs greyed, per slot | which enemies are dead |
+| 9 | Killfeed rows | icon model (weapon, modifiers), red outline/fill (whose), OCR (names) | kills, multi-kills, **who recorded the clip** |
+| 10 | Chat and event lines | OCR | team prefix (`[CT]`/`[T]`), money events |
+| 11 | Money | OCR | economy |
+| 12 | Armour | OCR | player state |
+| 13 | Health | OCR | player state, close calls |
+| 14 | Kill cards (above the emblem) | OCR of the count | the player's kills this round |
+| 15 | Round emblem | shape templates (star and knives = T, winged defuser = CT) | **the player's side** |
+| 16 | Ammo | OCR | player state |
+| 17 | Kit | present or not | equipment |
+| 18 | Weapon slots | icon model, OCR of the active weapon's name | current weapon |
+
+Also boxed, because they hide or replace the HUD: the **round-end banner** (`ROUND WON` / `ROUND LOST`, from the player's own point of view: **won/lost**), the MVP card, the buy menu, the scoreboard and the spectator panel (whose view it is after the player dies).
+
+**Timeline record** (per sampled second; a field is absent when its element isn't on screen or can't be read):
+```json
+{ "t": 3, "side": "ct", "timer": "1:34", "score": { "ct": 9, "t": 4 }, "round": 14,
+  "alive": { "ct": 5, "t": 4 }, "location": "Main Hall", "hostages": 2,
+  "player": { "hp": 86, "armour": 98, "money": 450, "weapon": "m4a1_silencer", "ammo": 10,
+              "kit": true, "round_kills": 1 },
+  "killfeed": [ { "killer": "…", "victim": "…", "weapon": "…", "modifiers": ["through_smoke"], "own": true } ],
+  "banner": null, "screen": "hud" }
+```
+Rules over it: side = the emblem's majority; won/lost = the banner; clutch = alive counts before a won banner; round = score sum + 1; who recorded = the killer's name in the player's own killfeed rows (also the MVP card, the spectator panel), matched against `users.steam_name`.
+
+**How it runs**
+- **Locator:** RF-DETR (decision 27's model family), one class per element and screen, trained in the training repo like the killfeed models. It replaces `killfeed-rows`. The input size is settled by experiment: the smallest elements (alive counts, ammo reserve) are ~15 px tall at 1080p, so they may be found as parts of their panel (score panel, ammo panel) and cut out by layout inside it.
+- **Static elements move only when the HUD settings change**, so the locator runs on a few frames per clip to fix their boxes (and again when a box comes up empty); only killfeed rows, kill cards, banners and screens are located on every frame. That keeps the per-frame cost near today's (~600 ms on the shared plan).
+- **Readers:** one OCR model for every text field, trained on text drawn in CS2's fonts (the killfeed generator already draws names in Stratum2), at the faint, semi-transparent contrast of the bottom HUD; the existing icon model for killfeed rows and weapon slots; the emblem templates (from the closed side-detection PR); a saturation check for greyed portraits.
+- **Settings players can change** (`cl_hud_color`, HUD scale, radar size, teammate colours) are why elements are found by the model and read by shape or text, never by fixed position or colour.
+
+**Data and checks**
+- Frames come from the originals, never from screenshots of the clipos player (its controls cover the bottom HUD). They stay in the private training dataset with the rest of the clips' data.
+- **Labels:** boxes in Label Studio, run locally. Static elements are boxed once per clip and copied to that clip's frames (pre-filled by Claude, checked by you); killfeed rows come from the existing labelled set; kill cards, chat, banners and screens are boxed where they appear, then pre-labelled by the first model and corrected.
+- **Eval clips** get a per-second timeline label too. CI's model gate scores the locator per element (mAP) and the readers per field (exact-match rate) on them, against the version in production.
+- Later: CS2 demos (demo file + a parser) give exact timelines for any match; recording their replay at many resolutions and HUD settings gives unlimited labelled video.
+
+**Order**
+- [ ] Label set v1: frames from the sample clips at several resolutions, every element boxed; timeline labels for the eval clips.
+- [ ] Locator v1 trained, evaluated and published (`hud-locator/v1`).
+- [ ] OCR reader v1.
+- [ ] The worker writes the timeline (`analysis_results.raw`), and the rules: side, won/lost, alive and clutches, names, who recorded. Tags and the kill card's T/CT and won/lost themes follow from them.
+- [ ] Retire `killfeed-rows` once the locator matches it on the killfeed eval.
+
 ### Phase 7 — Hardening & launch
 - [ ] Alerts, log queries, Postgres restore drill (PITR to a scratch server), blob soft-delete restore drill.
 - [ ] Security pass: SAS scopes/expiry, CORS, internal endpoint secret. (Headers — CSP, HSTS, nosniff, referrer and permissions policies — and the dependency audits, `cargo deny` and `pnpm audit`, were done in S1.)
@@ -512,3 +570,4 @@ The canvas's phone boards: the show pad with the reaction sheet (2.3), hosting f
 | 43 | **Vote counts stay hidden until the show ends** (decided 2026-10-03): during the finale `ShowView` has only who has voted in each category (`voters`) and your own votes; `votes` fills in once the show has ended | The reveal is the point of the finale; counts in every show response spoiled it for anyone reading the API |
 | 44 | **A disabled host stays host** (considered 2026-10-03, kept): disabling the host doesn't hand the show over; "Take over as host" once the host has been away is the only way out | The live room already closes a disabled user's connection, so the host goes away and the takeover timer starts; a second way would only add cases |
 | 45 | **App Service plan B2, not P1v3** (cost audit 2026-10-03): the plan averaged 3–6% CPU, the api peaked at 111 MB and the worker at 1.3 GB, so P1v3 was ~4× too big for 78% of the bill. B3 (same compute as P1v3, 7 GB) is the fallback if memory stays above 85% or jobs get too slow. A scale-to-zero worker waits for Container Apps in Israel Central: ACI works today but its changing outbound IPs need a Postgres private endpoint, which leaves only ~$4 a month on top of B2 | Saves ~$80 of ~$140 a month with a one-line change; jobs may take up to ~2× longer, and uploads default to waiting for the show anyway |
+| 46 | **One HUD analyzer, not a detector per feature** (decided 2026-10-04): a locator model for all 18 HUD elements plus readers (OCR, icons, emblem shapes), writing a per-second HUD timeline that features are rules over; the side-detection PR was closed in favour of it | Separate detectors would each add model time per frame and hardcode positions that HUD settings move; one locator finds every element wherever it is, and one model is one thing to label, train, gate and release |
