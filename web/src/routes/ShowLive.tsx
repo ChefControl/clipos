@@ -2,13 +2,14 @@ import { getRouteApi, Link } from "@tanstack/react-router";
 import { useRef } from "react";
 import { isNotFound } from "../api/errors";
 import { Kip } from "../kip/Kip";
+import { usePhone } from "../lib/usePhone";
 import { useTitle } from "../lib/useTitle";
-import { type Show, useShow } from "../show/hooks";
+import { joinLink, type Show as ShowView, useShow } from "../show/hooks";
 import { Joining } from "../show/Joining";
 import { Stage } from "../show/Stage";
 import { type ShowEvent, useShowLive } from "../show/useShowLive";
 import { Backdrop } from "../ui/Backdrop";
-import { buttonClass } from "../ui/Button";
+import { Button, buttonClass } from "../ui/Button";
 import { LoadError } from "../ui/LoadError";
 import { Panel } from "../ui/Panel";
 import { useToast } from "../ui/Toast";
@@ -21,6 +22,13 @@ const route = getRouteApi("/shows/$showId");
 // show (2.2, 2.3). It takes the whole window; the app's top bar steps aside.
 export function ShowLive() {
   const { showId } = route.useParams();
+  // The show is PC-only until Epic 2 (decision 39): a phone gets the way to a PC, and
+  // doesn't join the room.
+  if (usePhone()) return <OpenOnAPc showId={showId} />;
+  return <Show showId={showId} />;
+}
+
+function Show({ showId }: { showId: string }) {
   const me = useMe();
   const show = useShow(showId);
   const toast = useToast();
@@ -69,7 +77,7 @@ function Centered({ children }: { children: React.ReactNode }) {
 }
 
 /** The finale: voting arrives in S7. */
-function Finale({ show }: { show: Show }) {
+function Finale({ show }: { show: ShowView }) {
   return (
     <Centered>
       <Backdrop />
@@ -85,7 +93,7 @@ function Finale({ show }: { show: Show }) {
   );
 }
 
-function Over({ show }: { show: Show }) {
+function Over({ show }: { show: ShowView }) {
   return (
     <Centered>
       <Backdrop />
@@ -105,6 +113,43 @@ function Over({ show }: { show: Show }) {
           </Link>
           <Link to="/" className={buttonClass("primary")}>
             Archive
+          </Link>
+        </div>
+      </Panel>
+    </Centered>
+  );
+}
+
+/** A show link opened on a phone (decision 39): the show needs a bigger screen for now. */
+function OpenOnAPc({ showId }: { showId: string }) {
+  const toast = useToast();
+  useTitle("Open this on a PC");
+  return (
+    <Centered>
+      <Backdrop />
+      <Panel className="flex max-w-md flex-col items-center gap-4 p-8 text-center">
+        <Kip pose="bouncer" className="h-32 w-32" />
+        <h1 className="text-[34px] leading-tight font-extrabold tracking-tight">
+          Open this on a PC
+        </h1>
+        <p className="text-soft">
+          The show is made for a big screen for now: open the link on your computer and keep talking
+          in Discord. Phones get their own show soon.
+        </p>
+        <div className="flex flex-wrap justify-center gap-3">
+          <Button
+            variant="primary"
+            onClick={() =>
+              navigator.clipboard
+                .writeText(joinLink(showId))
+                .then(() => toast("Link copied. Paste it on your PC."))
+                .catch(() => toast(`Couldn't copy it. The link: ${joinLink(showId)}`, "danger"))
+            }
+          >
+            Copy the link
+          </Button>
+          <Link to="/" className={buttonClass("secondary")}>
+            Back to clipos
           </Link>
         </div>
       </Panel>

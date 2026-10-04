@@ -376,6 +376,8 @@ export async function mockApi(page: Page, { meError }: { meError?: string } = {}
     }
     if (path === `/api/shows/${SHOW_ID}`) return json(route, show);
     if (path === "/api/shows/tonight") return json(route, tonight);
+    // No show on, unless a test says otherwise.
+    if (path === "/api/shows/current") return json(route, null);
     if (method === "GET" && path === "/api/shows") return json(route, [pastShow]);
     const forShow = [showClip, showClip2].find((c) => path === `/api/clips/${c.id}`);
     if (forShow) return json(route, { ...forShow, playbackUrl: showVideos[forShow.id] });

@@ -316,3 +316,49 @@ test("no show has ever happened: the first one's waiting for clips", async ({ pa
   await expect(page.getByRole("heading", { name: "No new clips yet." })).toBeVisible();
   await expect(page.getByText("Clips uploaded this week land here")).toBeVisible();
 });
+
+test("while a show is on, every page has the Live pill, except the lobby", async ({ page }) => {
+  let current: { status: string } | null = {
+    id: LOBBY_ID,
+    status: "live",
+    host: jamie,
+    startedAt: "2026-10-02T19:00:00Z",
+  } as never;
+  await open(page, "/", false, undefined, (p) =>
+    p.route("**/api/shows/current", (route) => json(route, current)),
+  );
+  const pill = page.getByRole("link", { name: "Join Jamie Doe's show, live now" });
+  await expect(pill).toHaveAttribute("href", `/shows/${LOBBY_ID}`);
+  await expect(pill).toHaveText(/^Live\s*· Jamie Doe's show\s*Join$/);
+
+  // Not on Tonight, which says it itself.
+  await page.getByRole("navigation").getByRole("link", { name: "Tonight" }).click();
+  await expect(page.getByTestId("live-pill")).toHaveCount(0);
+
+  // A show in its lobby is starting; once it's over the pill goes.
+  current = { ...(current as object), status: "lobby" } as never;
+  await page.getByRole("navigation").getByRole("link", { name: "Archive" }).click();
+  await expect(
+    page.getByRole("link", { name: "Join Jamie Doe's show, starting soon" }),
+  ).toContainText("Starting");
+  current = null;
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Archive" })).toBeVisible();
+  await expect(page.getByTestId("live-pill")).toHaveCount(0);
+});
+
+test("people the show isn't open to never ask about it", async ({ page }) => {
+  let asked = 0;
+  await open(page, "/", false, undefined, async (p) => {
+    await p.route("**/api/me", (route) =>
+      json(route, { ...me, role: "member", shows: false, showsForEveryone: false }),
+    );
+    await p.route("**/api/shows/current", (route) => {
+      asked += 1;
+      return json(route, null);
+    });
+  });
+  await expect(page.getByRole("heading", { name: "Archive" })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(asked).toBe(0);
+});

@@ -1744,6 +1744,49 @@ async fn shows_are_admin_only_until_they_open(pool: PgPool) {
     assert!(json(&body)["show"].is_null());
 }
 
+/// Every page's "Live · Join" pill: the show that's on, in brief, from the lobby to the
+/// finale; nothing once it's over, and nothing for people the show isn't open to.
+#[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
+async fn the_current_show_for_the_live_pill(pool: PgPool) {
+    let admin = admin_token(&pool).await;
+    invite(&pool, "sam@gmail.com").await;
+    ready_clip(&pool, "google-oauth2|sam", "sam@gmail.com", "A").await;
+    let app = app(pool).await;
+    let sam = user_token("google-oauth2|sam", "sam@gmail.com");
+
+    let (status, body) = get(&app, "/api/shows/current", Some(&admin)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(json(&body).is_null());
+
+    let show = new_show(&app, &admin, false).await;
+    let (_, body) = get(&app, "/api/shows/current", Some(&admin)).await;
+    let current = json(&body);
+    assert_eq!(current["id"], show.as_str());
+    assert_eq!(current["status"], "lobby");
+    assert_eq!(current["host"]["handle"], "admin");
+    assert!(current["startedAt"].is_null());
+
+    let path = format!("/api/shows/{show}/start");
+    let (status, _) = send(&app, "POST", &path, Some(&admin), None, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, body) = get(&app, "/api/shows/current", Some(&admin)).await;
+    assert_eq!(json(&body)["status"], "live");
+    assert!(json(&body)["startedAt"].is_string());
+
+    // Not open to Sam yet: there's no such thing.
+    let (status, _) = get(&app, "/api/shows/current", Some(&sam)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let path = format!("/api/shows/{show}/finale");
+    let (status, _) = send(&app, "POST", &path, Some(&admin), None, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let path = format!("/api/shows/{show}/end");
+    let (status, body) = send(&app, "POST", &path, Some(&admin), None, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, body) = get(&app, "/api/shows/current", Some(&admin)).await;
+    assert!(json(&body).is_null());
+}
+
 #[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
 async fn a_show_from_lobby_to_winners(pool: PgPool) {
     let admin = admin_token(&pool).await;

@@ -19,6 +19,18 @@ export function useTonight() {
   });
 }
 
+/** The show that's on, in brief, for every page's Live pill: asked every 30 s while the
+ *  show is open to you. */
+export function useCurrentShow(enabled: boolean) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["shows", "current"],
+    queryFn: () => call(api.GET("/api/shows/current")),
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
 /** One show. The live room refetches it whenever the server says it changed. */
 export function useShow(id: string, initialData?: Show) {
   const api = useApi();
@@ -46,6 +58,7 @@ export function useShowActions(id: string) {
   const done = (show: Show) => {
     queryClient.setQueryData(["show", id], show);
     queryClient.invalidateQueries({ queryKey: ["tonight"] });
+    queryClient.invalidateQueries({ queryKey: ["shows", "current"] });
   };
   return {
     setLineup: useMutation({
@@ -80,6 +93,7 @@ export function useCreateShow() {
       queryClient.setQueryData(["show", show.id], show);
       queryClient.setQueryData<Tonight>(["tonight"], (t) => t && { ...t, show, clips: [] });
       queryClient.invalidateQueries({ queryKey: ["tonight"] });
+      queryClient.invalidateQueries({ queryKey: ["shows", "current"] });
     },
   });
 }

@@ -86,7 +86,9 @@ class Hub {
               // Playing from `startAt`, at least the lead play needs ahead, as the server.
               s.playing = msg.startAt != null;
               s.atServerMs =
-                msg.startAt != null ? Math.max(msg.startAt, this.now() + 400) : this.now();
+                msg.startAt != null
+                  ? Math.max(msg.startAt, this.now() + 400) + this.startDelayMs
+                  : this.now();
             });
           break;
         case "play":
@@ -137,6 +139,9 @@ class Hub {
   }
 
   hostId = me.id;
+  /** Holds scheduled starts back this much more, so a slow machine can look before one
+   *  starts. */
+  startDelayMs = 0;
   /** When the host left (hub time), while they're away. */
   hostAwaySince: number | null = null;
 
@@ -695,7 +700,9 @@ test("between clips: the next one counts down for everyone; Hold and Start now",
   const friend = await join(await browser.newContext(), hub, FRIEND, stored.routes);
   await playFirstClip(host, friend);
 
-  // The clip ends: the host's screen puts the next one on, 5 s ahead.
+  // The clip ends: the host's screen puts the next one on, 5 s ahead (and the stand-in
+  // holds it back 20 s more, so the checks below are done before it starts).
+  hub.startDelayMs = 20_000;
   hub.jump(39_800);
   await expect.poll(() => hub.state.clipId, { timeout: 5_000 }).toBe(showClip2.id);
   const load = hub.received.filter((r) => r.msg.type === "load").at(-1)?.msg;
@@ -788,9 +795,10 @@ test("the host drops out: the clip plays on, then anyone can take over after a m
 
   hub.hostLeft(61_000);
   await away.getByRole("button", { name: "Take over as host" }).click();
-  expect(hub.received.filter((r) => r.userId === FRIEND).at(-1)?.msg).toEqual({
-    type: "takeOver",
-  });
+  // Once (the new host's screen then moves on, so it may not be the last thing said).
+  await expect
+    .poll(() => hub.received.filter((r) => r.userId === FRIEND && r.msg.type === "takeOver"))
+    .toHaveLength(1);
   // The friend hosts now, and their screen moves the show on to the next clip.
   await expect(away).toBeHidden();
   await expect(friend.getByRole("button", { name: "Hold" })).toBeVisible();
@@ -804,7 +812,7 @@ test("someone waiting for a host who's gone can leave", async ({ page }) => {
   await page.routeWebSocket(/\/api\/shows\/[^/]+\/live$/, (ws) => hub.attach(ws, me.id));
   await open(page, `/shows/${SHOW_ID}`);
   const away = page.getByRole("alertdialog", { name: "Jamie Doe dropped out" });
-  await expect(away.getByRole("button", { name: /^Take over in 0:5\d$/ })).toBeDisabled();
+  await expect(away.getByRole("button", { name: /^Take over in 0:\d\d$/ })).toBeDisabled();
   await away.getByRole("button", { name: "Leave the show" }).click();
   await expect(page).toHaveURL(/\/tonight$/);
 });

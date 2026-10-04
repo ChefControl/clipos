@@ -314,6 +314,50 @@ pub async fn tonight(
     }))
 }
 
+/// The show that's on, in brief: what every page's "Live · Join" pill needs.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentShow {
+    pub id: Uuid,
+    #[schema(inline)]
+    pub status: ShowStatus,
+    pub host: Member,
+    pub started_at: Option<DateTime<Utc>>,
+}
+
+/// The show that's on (lobby, live or finale), or null. Cheap enough for every page to
+/// ask now and then.
+#[utoipa::path(
+    get,
+    path = "/shows/current",
+    tag = "shows",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "The show that's on, or null", body = Option<CurrentShow>),
+        (status = 404, description = "Shows aren't open to you yet", body = ErrorBody),
+    )
+)]
+pub async fn current_show(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+) -> Result<Json<Option<CurrentShow>>, ApiError> {
+    allowed(&state, &user)?;
+    let Some(show) = shows::open(&state.pool).await? else {
+        return Ok(Json(None));
+    };
+    let host = social::members_by_ids(&state.pool, &[show.host_id])
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("show host {} missing", show.host_id))?;
+    Ok(Json(Some(CurrentShow {
+        id: show.id,
+        status: show.status,
+        host,
+        started_at: show.started_at,
+    })))
+}
+
 /// Opens a show with tonight's clips; you host it. One show at a time (409 otherwise).
 #[utoipa::path(
     post,

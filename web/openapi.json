@@ -1779,6 +1779,59 @@
         ]
       }
     },
+    "/api/shows/current": {
+      "get": {
+        "tags": [
+          "shows"
+        ],
+        "summary": "The show that's on (lobby, live or finale), or null. Cheap enough for every page to\nask now and then.",
+        "operationId": "current_show",
+        "responses": {
+          "200": {
+            "description": "The show that's on, or null",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/CurrentShow"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Shows aren't open to you yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/shows/tonight": {
       "get": {
         "tags": [
@@ -3406,6 +3459,41 @@
           "uploadUrl": {
             "type": "string",
             "description": "Write SAS for the original: upload with Put Block + Put Block List, then call\n`POST /api/clips/{id}/complete`. Valid for 15 minutes plus a minute per 100 MB\n(at most 2 h)."
+          }
+        }
+      },
+      "CurrentShow": {
+        "type": "object",
+        "description": "The show that's on, in brief: what every page's \"Live · Join\" pill needs.",
+        "required": [
+          "id",
+          "status",
+          "host"
+        ],
+        "properties": {
+          "host": {
+            "$ref": "#/components/schemas/Member"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "lobby",
+              "live",
+              "finale",
+              "ended",
+              "abandoned"
+            ]
           }
         }
       },

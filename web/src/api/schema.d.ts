@@ -373,6 +373,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/shows/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The show that's on (lobby, live or finale), or null. Cheap enough for every page to
+         *     ask now and then.
+         */
+        get: operations["current_show"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/shows/tonight": {
         parameters: {
             query?: never;
@@ -782,6 +802,16 @@ export interface components {
              *     (at most 2 h).
              */
             uploadUrl: string;
+        };
+        /** @description The show that's on, in brief: what every page's "Live · Join" pill needs. */
+        CurrentShow: {
+            host: components["schemas"]["Member"];
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            startedAt?: string | null;
+            /** @enum {string} */
+            status: "lobby" | "live" | "finale" | "ended" | "abandoned";
         };
         DownloadLink: {
             /** @description Read SAS for the original that downloads with its file name (2 h). */
@@ -2376,6 +2406,44 @@ export interface operations {
             };
             /** @description A show is already on */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    current_show: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The show that's on, or null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentShow"] | null;
+                };
+            };
+            /** @description No token, or an invalid or expired one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Shows aren't open to you yet */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

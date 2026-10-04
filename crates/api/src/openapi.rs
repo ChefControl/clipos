@@ -80,6 +80,7 @@ pub fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::members::get_profile))
         .routes(routes!(routes::members::search_tags))
         .routes(routes!(routes::shows::tonight))
+        .routes(routes!(routes::shows::current_show))
         .routes(routes!(
             routes::shows::list_shows,
             routes::shows::create_show
