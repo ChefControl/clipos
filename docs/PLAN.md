@@ -483,7 +483,7 @@ Order: S1 → S2 → S4 → S3 → S5 → S6 → S7, then S8 and S9 (S9's show p
 - [x] "● Live · {host}'s show · Join" on every page but the lobby and the show, for everyone the show is open to ("Starting" while it's in the lobby): in the top bar, a strip under it on phones. It asks `GET /api/shows/current` (the show that's on, in brief: id, status, host) every 30 s rather than tonight's whole lineup. A show link on a phone (narrow, or a short touch screen) says "Open this on a PC", with Copy the link, and doesn't join the room.
 
 **S7 — Finale, winners, past shows**
-- [ ] Finale vote with the 20 s timer (2.5), host tie-break, Fail of the night (2.6, violet, banana Kip), Clip of the night (2.7, crowned Kip); results stored.
+- [x] Finale vote with the 20 s timer (2.5, `web/src/show/Finale.tsx`): the show stores when it went to its finale (`shows.finale_at`, migration 0016) and `ShowView.finale` has the vote's windows from it, fail of the night then clip of the night, 20 s each (`core::shows::vote_windows`; no 🍌, no fail vote), so every screen counts down to the same moments. Votes count until the host's screen ends the show a second after the last window; the windows aren't enforced by the server. Who has voted, not for what (decision 43). A tie: "Host decides", the host picks and announces. Then fail of the night (2.6, violet, banana Kip) for 8 s and clip of the night (2.7, crowned Kip) with their counts (`Reveal.tsx`); opened later, clip of the night with the fail a click away.
 - [ ] Archive past shows (4.1, top half) with the solo replay; trophy shelf; profile stats and trophies; clip page "Played at … show" line; "Clips of the night" and "Fails" filters.
 
 **S8 — Kip's kill card, v1** (6.1, and its motion demo)

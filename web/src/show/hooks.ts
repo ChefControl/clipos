@@ -7,6 +7,8 @@ export type Show = components["schemas"]["ShowView"];
 export type PastShow = components["schemas"]["PastShow"];
 export type Tonight = components["schemas"]["Tonight"];
 export type LineupEntry = components["schemas"]["LineupEntry"];
+export type Category = "clip" | "fail";
+export type TieBreak = components["schemas"]["TieBreak"];
 
 /** Tonight: the show that's on, or the clips the next one would play. Polled, so a show
  *  someone else opens turns up without a reload. */
@@ -73,6 +75,24 @@ export function useShowActions(id: string) {
     }),
     start: useMutation({
       mutationFn: () => call(api.POST("/api/shows/{id}/start", path)),
+      onSuccess: done,
+    }),
+    /** Your vote in the finale; voting again changes it. */
+    vote: useMutation({
+      mutationFn: ({ category, clipId }: { category: Category; clipId: string }) =>
+        call(
+          api.PUT("/api/shows/{id}/votes/{category}", {
+            params: { path: { id, category } },
+            body: { clipId },
+          }),
+        ),
+      onSuccess: done,
+    }),
+    /** The host ends the finale: winners are stored. A tie fails with the tied clips
+     *  (`ApiError.tied`) until the host picks in `tieBreak`. */
+    end: useMutation({
+      mutationFn: (tieBreak?: TieBreak) =>
+        call(api.POST("/api/shows/{id}/end", { ...path, body: { tieBreak: tieBreak ?? {} } })),
       onSuccess: done,
     }),
     /** To the finale: after the last clip, or to end the show early. */

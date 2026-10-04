@@ -3548,6 +3548,44 @@
           }
         }
       },
+      "FinaleView": {
+        "type": "object",
+        "description": "When each category of the finale vote runs, 20 s each (decision 31): every screen\ncounts down to the same moments.",
+        "required": [
+          "startedAt",
+          "clipFrom",
+          "clipUntil"
+        ],
+        "properties": {
+          "clipFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "clipUntil": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failFrom": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Fail of the night, first; none when nobody pressed 🍌 tonight."
+          },
+          "failUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "Invite": {
         "type": "object",
         "required": [
@@ -4074,6 +4112,17 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "finale": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FinaleView",
+                "description": "The vote's timing, from when the show went to its finale."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "host": {
             "$ref": "#/components/schemas/Member"

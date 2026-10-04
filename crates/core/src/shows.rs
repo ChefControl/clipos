@@ -63,6 +63,34 @@ pub struct Show {
     pub ended_at: Option<DateTime<Utc>>,
     pub clip_winner_id: Option<Uuid>,
     pub fail_winner_id: Option<Uuid>,
+    /// When it went to the finale: the vote's windows run from it (`vote_windows`).
+    pub finale_at: Option<DateTime<Utc>>,
+}
+
+/// How long each category of the finale vote runs (decision 31).
+pub const VOTE_SECS: i64 = 20;
+
+/// The finale vote's windows: fail of the night first, then clip of the night, 20 s each
+/// (decision 31). With no 🍌 tonight there's no fail vote, and clip of the night starts
+/// straight away. The screens count down to them; the host's ends the show when the last
+/// one closes, and votes count until then.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoteWindows {
+    pub fail: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    pub clip: (DateTime<Utc>, DateTime<Utc>),
+}
+
+pub fn vote_windows(finale_at: DateTime<Utc>, any_fails: bool) -> VoteWindows {
+    let each = chrono::Duration::seconds(VOTE_SECS);
+    let clip_from = if any_fails {
+        finale_at + each
+    } else {
+        finale_at
+    };
+    VoteWindows {
+        fail: any_fails.then_some((finale_at, finale_at + each)),
+        clip: (clip_from, clip_from + each),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
@@ -134,7 +162,8 @@ type Result<T> = std::result::Result<T, ShowError>;
 
 macro_rules! show_columns {
     () => {
-        "id, host_id, status, created_at, started_at, ended_at, clip_winner_id, fail_winner_id"
+        "id, host_id, status, created_at, started_at, ended_at, clip_winner_id, fail_winner_id, \
+         finale_at"
     };
 }
 
@@ -532,13 +561,18 @@ pub async fn set_ready(pool: &PgPool, id: Uuid, user: Uuid, ready: bool) -> Resu
 
 /// Moves an open show from one status to the next, if it's still in `from`.
 async fn advance(pool: &PgPool, id: Uuid, from: ShowStatus, to: ShowStatus) -> Result<()> {
-    let changed = sqlx::query("UPDATE shows SET status = $3 WHERE id = $1 AND status = $2")
-        .bind(id)
-        .bind(from)
-        .bind(to)
-        .execute(pool)
-        .await?
-        .rows_affected();
+    // Going to the finale starts the vote's clock (`vote_windows`).
+    let changed = sqlx::query(
+        "UPDATE shows SET status = $3,
+                finale_at = CASE WHEN $3 = 'finale' THEN now() ELSE finale_at END
+          WHERE id = $1 AND status = $2",
+    )
+    .bind(id)
+    .bind(from)
+    .bind(to)
+    .execute(pool)
+    .await?
+    .rows_affected();
     if changed == 0 {
         return Err(ShowError::Conflict("the show moved on meanwhile".into()));
     }
@@ -894,6 +928,20 @@ pub async fn abandon(pool: &PgPool, id: Uuid) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_vote_runs_fail_then_clip_or_clip_alone() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-10-02T20:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let s = |n: i64| at + chrono::Duration::seconds(n);
+        let both = super::vote_windows(at, true);
+        assert_eq!(both.fail, Some((s(0), s(20))));
+        assert_eq!(both.clip, (s(20), s(40)));
+        let clip_only = super::vote_windows(at, false);
+        assert_eq!(clip_only.fail, None);
+        assert_eq!(clip_only.clip, (s(0), s(20)));
+    }
+
     use super::*;
     use crate::social::tests::{ready_clip, user};
 

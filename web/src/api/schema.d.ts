@@ -833,6 +833,25 @@ export interface components {
             message: string;
             tied?: components["schemas"]["Ties"] | null;
         };
+        /**
+         * @description When each category of the finale vote runs, 20 s each (decision 31): every screen
+         *     counts down to the same moments.
+         */
+        FinaleView: {
+            /** Format: date-time */
+            clipFrom: string;
+            /** Format: date-time */
+            clipUntil: string;
+            /**
+             * Format: date-time
+             * @description Fail of the night, first; none when nobody pressed 🍌 tonight.
+             */
+            failFrom?: string | null;
+            /** Format: date-time */
+            failUntil?: string | null;
+            /** Format: date-time */
+            startedAt: string;
+        };
         Invite: {
             /**
              * Format: date-time
@@ -1025,6 +1044,7 @@ export interface components {
             failContenders: string[];
             /** Format: uuid */
             failWinnerId?: string | null;
+            finale?: components["schemas"]["FinaleView"] | null;
             host: components["schemas"]["Member"];
             /** Format: uuid */
             id: string;

@@ -4,8 +4,10 @@ import { isNotFound } from "../api/errors";
 import { Kip } from "../kip/Kip";
 import { usePhone } from "../lib/usePhone";
 import { useTitle } from "../lib/useTitle";
+import { Finale } from "../show/Finale";
 import { joinLink, type Show as ShowView, useShow } from "../show/hooks";
 import { Joining } from "../show/Joining";
+import { Reveal } from "../show/Reveal";
 import { Stage } from "../show/Stage";
 import { type ShowEvent, useShowLive } from "../show/useShowLive";
 import { Backdrop } from "../ui/Backdrop";
@@ -56,7 +58,11 @@ function Show({ showId }: { showId: string }) {
   const status = show.data.status;
   // Who you are in the room: the server says so when you connect.
   const meId = live.userId ?? me.data.id;
-  if (live.over || status === "ended" || status === "abandoned") return <Over show={show.data} />;
+  if (status === "ended") return <Reveal show={show.data} live={live} />;
+  // The room said it's over: after a finale the winners are on their way (no flash of
+  // "over" before them); otherwise it ended by itself.
+  if (live.over && status === "finale") return null;
+  if (status === "abandoned" || live.over) return <Over show={show.data} />;
   // Closed for good: why, once (the server's reason).
   if (live.connection === "closed") {
     return (
@@ -68,29 +74,12 @@ function Show({ showId }: { showId: string }) {
     );
   }
   if (status === "lobby") return <Joining show={show.data} live={live} meId={meId} />;
-  if (status === "finale") return <Finale show={show.data} />;
+  if (status === "finale") return <Finale show={show.data} live={live} meId={meId} />;
   return <Stage show={show.data} live={live} meId={meId} events={events} />;
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
   return <div className="grid min-h-dvh place-items-center p-6">{children}</div>;
-}
-
-/** The finale: voting arrives in S7. */
-function Finale({ show }: { show: ShowView }) {
-  return (
-    <Centered>
-      <Backdrop />
-      <Panel className="flex max-w-lg flex-col items-center gap-4 p-10 text-center">
-        <Kip pose="king" className="h-32 w-32" />
-        <h1 className="text-4xl font-extrabold tracking-tight">Finale</h1>
-        <p className="text-soft">
-          That was every clip. <bdi>{show.host.displayName}</bdi>'s show is picking clip and fail of
-          the night.
-        </p>
-      </Panel>
-    </Centered>
-  );
 }
 
 function Over({ show }: { show: ShowView }) {
