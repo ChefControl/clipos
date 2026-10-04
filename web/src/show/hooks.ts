@@ -62,6 +62,11 @@ export function useShowActions(id: string) {
       mutationFn: () => call(api.POST("/api/shows/{id}/start", path)),
       onSuccess: done,
     }),
+    /** To the finale: after the last clip, or to end the show early. */
+    finale: useMutation({
+      mutationFn: () => call(api.POST("/api/shows/{id}/finale", path)),
+      onSuccess: done,
+    }),
   };
 }
 

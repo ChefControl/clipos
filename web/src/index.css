@@ -117,3 +117,20 @@ body {
     animation: fade-out 2.5s linear forwards;
   }
 }
+
+/* Up next's ring (canvas 2.4): one second's sweep, restarted each second. */
+@keyframes countdown-sweep {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 1;
+  }
+}
+
+@utility countdown-sweep {
+  animation: countdown-sweep 1s linear forwards;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}

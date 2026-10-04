@@ -57,7 +57,7 @@ class Hub {
     this.connects.set(userId, (this.connects.get(userId) ?? 0) + 1);
     ws.onMessage((raw) => {
       const msg = JSON.parse(String(raw));
-      const host = userId === me.id;
+      const host = userId === this.hostId;
       if (msg.type !== "hello" && msg.type !== "ping") this.received.push({ userId, msg });
       switch (msg.type) {
         case "hello":
@@ -117,6 +117,11 @@ class Hub {
         case "replayRequest":
           this.broadcast({ type: "replayRequest", userId });
           break;
+        case "takeOver":
+          this.hostId = userId;
+          this.hostAwaySince = null;
+          this.broadcast({ type: "presence", presence: this.presence() });
+          break;
         case "seek":
           if (host)
             this.change((s) => {
@@ -131,8 +136,30 @@ class Hub {
     });
   }
 
+  hostId = me.id;
+  /** When the host left (hub time), while they're away. */
+  hostAwaySince: number | null = null;
+
   presence() {
-    return { hostId: me.id, online: [...this.sockets.keys()], hostAwaySince: null };
+    return {
+      hostId: this.hostId,
+      online: [...this.sockets.keys()],
+      hostAwaySince: this.hostAwaySince,
+    };
+  }
+
+  /** The host's player jumps to `positionMs`, as a seek does. */
+  jump(positionMs: number) {
+    this.change((s) => {
+      s.positionMs = positionMs;
+      s.atServerMs = this.now();
+    });
+  }
+
+  /** The host goes away `agoMs` ago. */
+  hostLeft(agoMs: number) {
+    this.hostAwaySince = this.now() - agoMs;
+    this.broadcast({ type: "presence", presence: this.presence() });
   }
 
   /** Says something to everyone in the room. */
@@ -603,7 +630,7 @@ test("the side panel: up next, play one now, hide it, add a clip", async ({ page
   await open(page, `/shows/${SHOW_ID}`, false, undefined, stored.routes);
   const panel = page.getByRole("complementary", { name: "Up next" });
   await expect(panel).toContainText("Up next · 2 clips · 1:20");
-  await expect(page.getByText(`clip 1 of 2`)).toBeVisible();
+  await expect(page.getByText("clip 1 of 2", { exact: true })).toBeVisible();
 
   await testInfo.attach("show-host.png", {
     body: await page.screenshot({ fullPage: true }),
@@ -616,7 +643,7 @@ test("the side panel: up next, play one now, hide it, add a clip", async ({ page
   await panel.getByRole("button", { name: `Play ${showClip2.title} now` }).click();
   await expect.poll(() => hub.state.clipId).toBe(showClip2.id);
   expect(hub.state.playing).toBe(true);
-  await expect(page.getByText("clip 2 of 2")).toBeVisible();
+  await expect(page.getByText("clip 2 of 2", { exact: true })).toBeVisible();
   await expect(panel).toContainText(/in 0:\d\d/);
 
   // Folded away and back.
@@ -649,5 +676,135 @@ test("the finale and an abandoned show have their own screens", async ({ page })
   await expect(page.getByTestId("show-over")).toBeVisible();
   await expect(page.getByText("Everyone left, so it ended without a finale.")).toBeVisible();
   await page.getByRole("link", { name: "Tonight" }).click();
+  await expect(page).toHaveURL(/\/tonight$/);
+});
+
+test("between clips: the next one counts down for everyone; Hold and Start now", async ({
+  browser,
+}, testInfo) => {
+  test.setTimeout(60_000);
+  const hub = new Hub();
+  const stored = new StoredShow({
+    reactions: [
+      { clipId: showClip.id, userId: FRIEND, emoji: "🔥", atMs: 1000 },
+      { clipId: showClip.id, userId: me.id, emoji: "🔥", atMs: 2000 },
+      { clipId: showClip.id, userId: FRIEND, emoji: "💀", atMs: 3000 },
+    ],
+  });
+  const host = await join(await browser.newContext(), hub, me.id, stored.routes);
+  const friend = await join(await browser.newContext(), hub, FRIEND, stored.routes);
+  await playFirstClip(host, friend);
+
+  // The clip ends: the host's screen puts the next one on, 5 s ahead.
+  hub.jump(39_800);
+  await expect.poll(() => hub.state.clipId, { timeout: 5_000 }).toBe(showClip2.id);
+  const load = hub.received.filter((r) => r.msg.type === "load").at(-1)?.msg;
+  expect(Number(load?.startAt) - hub.now()).toBeGreaterThan(3_000);
+  for (const page of [host, friend]) {
+    const between = page.getByTestId("between");
+    await expect(between).toContainText("Next up · clip 2 of 2");
+    await expect(between).toContainText("Starting for everyone");
+    // The host, and nobody else said "I'm ready".
+    await expect(between).toContainText("1 of 2 watching is ready");
+    await expect(page.getByTestId("just-played-reactions")).toHaveText("🔥2💀1");
+  }
+  await expect(friend.getByText("clip starts on its own when the count hits 0")).toBeVisible();
+  await testInfo.attach("between.png", {
+    body: await host.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
+  expect(await layoutProblems(host)).toEqual([]);
+
+  // Hold: the count stops for everyone.
+  await host.getByRole("button", { name: "Hold" }).click();
+  await expect(friend.getByTestId("between")).toContainText("Held");
+  await expect(friend.getByText("Held. It starts when Robin starts it.")).toBeVisible();
+  await expect(host.getByRole("button", { name: "Hold" })).toHaveCount(0);
+
+  // Start now: it plays, and Up next goes.
+  await host.getByRole("button", { name: "Start now" }).click();
+  await startPlaying(friend);
+  await expect(friend.getByTestId("between")).toHaveCount(0);
+  await expect(friend.getByText("Second show clip")).toBeVisible();
+});
+
+test("after the last clip the host opens the finale; End the show gets there early", async ({
+  browser,
+}) => {
+  test.setTimeout(60_000);
+  const hub = new Hub();
+  // The first clip has played already.
+  const stored = new StoredShow();
+  const first = stored.show.lineup[0];
+  if (first) first.playedAt = stored.show.createdAt;
+  const host = await join(await browser.newContext(), hub, me.id, stored.routes);
+  const friend = await join(await browser.newContext(), hub, FRIEND, stored.routes);
+
+  // End the show early: asked first.
+  await host.getByRole("button", { name: "End the show" }).click();
+  const dialog = host.getByRole("dialog", { name: "End the show now?" });
+  await dialog.getByRole("button", { name: "Keep watching" }).click();
+  await expect(dialog).toBeHidden();
+  expect(stored.posts).toEqual([]);
+
+  // The last clip plays to its end.
+  await host.getByRole("button", { name: `Play ${showClip2.title} now` }).click();
+  await startPlaying(host);
+  hub.jump(39_900);
+  await expect(host.getByText("That was every clip.")).toBeVisible();
+  await expect(friend.getByText("Waiting for Robin to open the finale.")).toBeVisible();
+  await host.getByRole("button", { name: "Go to the finale" }).click();
+  expect(stored.posts.map((p) => p.path)).toEqual([`/api/shows/${SHOW_ID}/finale`]);
+
+  // Or straight from the dialog.
+  await host.getByRole("button", { name: "End the show" }).click();
+  await dialog.getByRole("button", { name: "End and vote" }).click();
+  await expect(dialog).toBeHidden();
+  expect(stored.posts).toHaveLength(2);
+  stored.show.status = "finale";
+  hub.say({ type: "showChanged" });
+  await expect(friend.getByRole("heading", { name: "Finale" })).toBeVisible();
+});
+
+test("the host drops out: the clip plays on, then anyone can take over after a minute", async ({
+  browser,
+}) => {
+  test.setTimeout(60_000);
+  const hub = new Hub();
+  const host = await join(await browser.newContext(), hub, me.id);
+  const friend = await join(await browser.newContext(), hub, FRIEND);
+  await playFirstClip(host, friend);
+
+  await host.close();
+  hub.hostLeft(30_000);
+  await expect(friend.getByText("Robin dropped out. The clip plays to its end.")).toBeVisible();
+  expect((await videoState(friend)).paused).toBe(false);
+
+  // The clip is over: the show holds, and the takeover counts down.
+  hub.jump(40_000);
+  const away = friend.getByRole("alertdialog", { name: "Robin dropped out" });
+  await expect(away).toBeVisible();
+  await expect(away.getByRole("button", { name: /^Take over in 0:\d\d$/ })).toBeDisabled();
+
+  hub.hostLeft(61_000);
+  await away.getByRole("button", { name: "Take over as host" }).click();
+  expect(hub.received.filter((r) => r.userId === FRIEND).at(-1)?.msg).toEqual({
+    type: "takeOver",
+  });
+  // The friend hosts now, and their screen moves the show on to the next clip.
+  await expect(away).toBeHidden();
+  await expect(friend.getByRole("button", { name: "Hold" })).toBeVisible();
+  await expect.poll(() => hub.state.clipId).toBe(showClip2.id);
+});
+
+test("someone waiting for a host who's gone can leave", async ({ page }) => {
+  const hub = new Hub();
+  hub.hostId = FRIEND;
+  hub.hostAwaySince = hub.now() - 5_000;
+  await page.routeWebSocket(/\/api\/shows\/[^/]+\/live$/, (ws) => hub.attach(ws, me.id));
+  await open(page, `/shows/${SHOW_ID}`);
+  const away = page.getByRole("alertdialog", { name: "Jamie Doe dropped out" });
+  await expect(away.getByRole("button", { name: /^Take over in 0:5\d$/ })).toBeDisabled();
+  await away.getByRole("button", { name: "Leave the show" }).click();
   await expect(page).toHaveURL(/\/tonight$/);
 });
