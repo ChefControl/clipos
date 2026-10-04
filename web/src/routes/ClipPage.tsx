@@ -20,7 +20,7 @@ import { Player } from "../clips/Player";
 import { Reactions } from "../clips/Reactions";
 import { SharePanel } from "../clips/SharePanel";
 import { Kip } from "../kip/Kip";
-import { formatBytes, formatDuration, shortDate, timeAgo } from "../lib/format";
+import { formatBytes, formatDuration, shortDate, showName, timeAgo } from "../lib/format";
 import { useTitle } from "../lib/useTitle";
 import { Avatar } from "../ui/Avatar";
 import { Backdrop } from "../ui/Backdrop";
@@ -200,6 +200,7 @@ function Details({ clip, onOpen }: { clip: Clip; onOpen: (d: Dialog) => void }) 
       </div>
 
       {clip.heldUntil && clip.isMine && !clip.deletedAt && <HeldNotice clip={clip} />}
+      {clip.playedIn && <PlayedIn clip={clip} />}
       {live && (
         <div className="flex flex-wrap items-center gap-2">
           <Reactions clip={clip} />
@@ -889,5 +890,48 @@ function Failed({ clip, onDelete }: { clip: Clip; onDelete: () => void }) {
         </div>
       </div>
     </Panel>
+  );
+}
+
+/** "Played at Friday night show, Oct 2 · Clip 1 of 3 · lost the vote to Sh15's clip"
+ *  (canvas 3.3), with a way to watch that show again. */
+function PlayedIn({ clip }: { clip: Clip }) {
+  const p = clip.playedIn;
+  if (!p) return null;
+  const outcome = clip.clipOfTheNight
+    ? "clip of the night"
+    : p.lostTo
+      ? `lost the vote to ${p.lostTo.uploader}'s ${p.lostTo.title}`
+      : null;
+  return (
+    <div
+      className={`glass squircle flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl py-3 pr-3 pl-4 ${
+        clip.clipOfTheNight ? "ring-1 ring-accent/50 ring-inset" : ""
+      }`}
+      data-testid="played-in"
+    >
+      <Kip
+        pose={clip.clipOfTheNight ? "king" : clip.failOfTheNight ? "banana-slip" : "idle"}
+        className="h-10 w-10 shrink-0"
+      />
+      <span className="flex min-w-[12rem] flex-1 flex-col [overflow-wrap:anywhere]">
+        <span className="font-bold">
+          Played at {showName(p.startedAt)}
+          {p.startedAt && `, ${shortDate(p.startedAt)}`}
+        </span>
+        <span className="text-sm text-soft">
+          Clip {p.position} of {p.count}
+          {clip.failOfTheNight && " · fail of the night"}
+          {outcome && ` · ${outcome}`}
+        </span>
+      </span>
+      <Link
+        to="/shows/$showId/replay"
+        params={{ showId: p.showId }}
+        className={buttonClass("secondary", "sm")}
+      >
+        Watch the show
+      </Link>
+    </div>
   );
 }

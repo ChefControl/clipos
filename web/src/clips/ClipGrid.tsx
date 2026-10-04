@@ -54,7 +54,7 @@ export function ClipGrid({ filters, empty }: { filters: ClipFilters; empty: Reac
   }
   return (
     <>
-      <div className={GRID}>
+      <div className={GRID} data-testid="clip-grid">
         {all.map((clip) => (
           <ClipCard key={clip.id} clip={clip} />
         ))}

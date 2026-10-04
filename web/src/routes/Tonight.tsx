@@ -291,8 +291,16 @@ function NothingNew({ lastShow }: { lastShow: PastShow | null }) {
         >
           Upload a clip
         </Link>
+        {lastShow && (
+          <Link
+            to="/shows/$showId/replay"
+            params={{ showId: lastShow.id }}
+            className={`${buttonClass("secondary", "lg")} frost h-14 px-6`}
+          >
+            Watch last show's replay
+          </Link>
+        )}
       </Hero>
-      {/* The last show's replay joins this card in S7; until then it opens the winner. */}
       {lastShow && winner && (
         <Link
           to="/clips/$clipId"
@@ -599,12 +607,20 @@ function PastShows() {
         ) : (
           <ul className="flex flex-col gap-1">
             {shows.slice(0, 3).map((s) => (
-              <li key={s.id} className="flex items-baseline gap-2 text-[15px]">
-                <span className="font-semibold">{s.endedAt ? showDate(s.endedAt) : "A show"}</span>
-                <span className="min-w-0 truncate text-muted">
-                  <bdi>{s.host.displayName}</bdi> hosted · {s.clips.length}{" "}
-                  {s.clips.length === 1 ? "clip" : "clips"}
-                </span>
+              <li key={s.id}>
+                <Link
+                  to="/shows/$showId/replay"
+                  params={{ showId: s.id }}
+                  className="-mx-2 flex min-h-11 items-center gap-2 rounded-xl px-2 text-[15px] text-text hover:bg-white/5 hover:text-white"
+                >
+                  <span className="font-semibold">
+                    {s.endedAt ? showDate(s.endedAt) : "A show"}
+                  </span>
+                  <span className="min-w-0 truncate text-muted">
+                    <bdi>{s.host.displayName}</bdi> hosted · {s.clips.length}{" "}
+                    {s.clips.length === 1 ? "clip" : "clips"}
+                  </span>
+                </Link>
               </li>
             ))}
           </ul>

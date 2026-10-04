@@ -38,6 +38,12 @@ const routeTree = rootRoute.addChildren([
     path: "/shows/$showId",
     component: lazyRouteComponent(() => import("./routes/ShowLive"), "ShowLive"),
   }),
+  // A past show's replay, alone (S7). Its own chunk.
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/shows/$showId/replay",
+    component: lazyRouteComponent(() => import("./routes/ShowReplay"), "ShowReplay"),
+  }),
   createRoute({
     getParentRoute: () => rootRoute,
     path: "/u/$handle",
