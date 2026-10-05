@@ -18,7 +18,7 @@ use std::{
 use anyhow::{Context, anyhow, bail};
 use clipos_core::{
     clips::{self, Clip, ClipStatus, Transcoded},
-    jobs,
+    dedup, jobs,
     storage::{Access, BlobChanged, Container, Overrides},
 };
 use serde::Deserialize;
@@ -118,7 +118,7 @@ pub async fn run(worker: &Worker, payload: &Value) -> Result<(), JobError> {
     tokio::fs::create_dir_all(&dir)
         .await
         .with_context(|| format!("creating {}", dir.display()))?;
-    let result = transcode(worker, &clip, &dir, None).await;
+    let result = first_transcode(worker, &clip, &dir).await;
     // Always clean up the scratch files, whatever happened.
     if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
         tracing::warn!(error = %e, dir = %dir.display(), "couldn't remove temp dir");
@@ -222,6 +222,55 @@ pub async fn rekey(worker: &Worker, payload: &Value) -> Result<(), JobError> {
 /// How long the files a re-encode replaced are kept: until every link to them handed out
 /// before the switch has expired, plus a margin.
 const REPLACED_FILES_KEPT: Duration = Duration::from_secs(clips::VIEW_TTL.as_secs() + 15 * 60);
+
+/// A new upload's transcode: first makes sure its file isn't here already.
+async fn first_transcode(worker: &Worker, clip: &Clip, dir: &Path) -> Result<Transcoded, JobError> {
+    let source = local_or_remote(worker, clip, dir).await?;
+    claim_original(worker, clip, &source).await?;
+    transcode_from(worker, clip, dir, source, None).await
+}
+
+/// Fingerprints the original and keeps the fingerprint, unless another clip holds the same
+/// file: then the clip fails for good, as a duplicate of that one (decision 55). The
+/// browser asks before uploading; this catches what it couldn't see, e.g. the same file
+/// uploaded twice at once.
+pub(crate) async fn claim_original(
+    worker: &Worker,
+    clip: &Clip,
+    source: &Source,
+) -> Result<(), JobError> {
+    let started = Instant::now();
+    let fp = if source.remote {
+        let fp = dedup::of_blob(
+            &worker.storage,
+            Container::Originals,
+            &clip.original_blob,
+            clip.original_etag.as_deref(),
+        )
+        .await;
+        match fp {
+            Err(e) if e.is::<BlobChanged>() => return Err(changed()),
+            fp => fp?,
+        }
+    } else {
+        dedup::of_file(Path::new(&source.input)).await?
+    };
+    if fp.bytes != clip.original_bytes {
+        return Err(changed());
+    }
+    let other = dedup::claim_original(&worker.pool, clip.id, &fp)
+        .await
+        .map_err(anyhow::Error::from)?;
+    tracing::info!(
+        hash_ms = started.elapsed().as_millis() as u64,
+        duplicate_of = ?other,
+        "fingerprinted original"
+    );
+    match other {
+        Some(_) => Err(JobError::Permanent(clips::DUPLICATE_ERROR.into())),
+        None => Ok(()),
+    }
+}
 
 /// Transcodes (or remuxes) the original and uploads the playback file, poster and teaser.
 /// `rev` gives the playback file and poster new names (`clips::new_rev`), for a clip
@@ -366,6 +415,8 @@ pub(crate) async fn transcode_from(
     // beyond reading, so it teases without spoiling.
     let teaser = dir.join("teaser.jpg");
     run_ffmpeg(&teaser_args(&poster, &teaser)).await?;
+    // A download of the playback file uploaded again is a copy too.
+    let playback_fingerprint = dedup::of_file(&output).await?;
 
     let speed = if wall.as_secs_f64() > 0.0 {
         out_duration / wall.as_secs_f64()
@@ -419,6 +470,7 @@ pub(crate) async fn transcode_from(
     Ok(Transcoded {
         playback_blob,
         poster_blob,
+        playback_fingerprint,
         duration_ms: (out_duration * 1000.0).round() as i32,
         width: width as i32,
         height: height as i32,

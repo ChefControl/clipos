@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 pub mod analyse;
 pub mod config;
+pub mod fingerprint;
 mod service;
 pub mod transcode;
 
@@ -181,6 +182,7 @@ impl Worker {
             clips::TRANSCODE_JOB => transcode::run(self, &job.payload).await,
             clips::ANALYSE_JOB => analyse::run(self, &job.payload).await,
             clips::KEYFRAMES_JOB => transcode::rekey(self, &job.payload).await,
+            clips::FINGERPRINT_JOB => fingerprint::run(self, &job.payload).await,
             clips::DELETE_BLOBS_JOB => self.delete_blobs(&job.payload).await,
             // Smoke-test job used to verify the pipeline end to end.
             "noop" => Ok(()),

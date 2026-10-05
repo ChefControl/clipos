@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::*;
 
+mod dedup;
 mod killfeed;
 
 /// Azurite's well-known development account (public, not a secret).
@@ -395,6 +396,7 @@ async fn purges_clips_after_a_week_in_the_trash(pool: PgPool) {
             height: 1080,
             fps: 60.0,
             metadata: json!({}),
+            playback_fingerprint: clipos_core::testing::fingerprint(clip.id),
         },
     )
     .await
@@ -1704,7 +1706,10 @@ async fn a_clip_restored_while_processing_is_finished(pool: PgPool) {
     let clip = uploaded_clip(&worker, &source).await;
     assert!(clips::soft_delete(&pool, clip.id).await.unwrap());
     assert!(worker.run_once().await.unwrap(), "dropped");
-    assert!(clips::restore(&pool, clip.id).await.unwrap());
+    assert_eq!(
+        clips::restore(&pool, clip.id).await.unwrap(),
+        clips::Restore::Restored
+    );
     assert!(worker.run_once().await.unwrap(), "queued again");
     assert_ready(
         &clips::get(&pool, clip.id).await.unwrap().unwrap(),
@@ -1906,8 +1911,12 @@ async fn queues_killfeed_analysis_for_the_uploaders_own_view(pool: PgPool) {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let source = dir.path().join("s.mp4");
-    small_video(&source, 1);
+    // Three files, as one file is only kept once.
+    let [source, other, third] = ["s", "other", "third"].map(|name| {
+        let path = dir.path().join(format!("{name}.mp4"));
+        small_video_with(&path, 1, &["-metadata", &format!("title={name}")]);
+        path
+    });
     let mut worker = worker(pool.clone());
     worker.analyse = Some(AnalyseConfig {
         models_dir: dir.path().join("models"),
@@ -1935,7 +1944,7 @@ async fn queues_killfeed_analysis_for_the_uploaders_own_view(pool: PgPool) {
         .unwrap();
 
     // Someone else's point of view: their killfeed isn't the uploader's.
-    let theirs = uploaded_clip(&worker, &source).await;
+    let theirs = uploaded_clip(&worker, &other).await;
     sqlx::query("UPDATE clips SET my_pov = false WHERE id = $1")
         .bind(theirs.id)
         .execute(&pool)
@@ -1952,7 +1961,7 @@ async fn queues_killfeed_analysis_for_the_uploaders_own_view(pool: PgPool) {
 
     // The analysis can't be queued.
     refuse(&pool, "INSERT ON jobs", "NEW.kind = 'analyse'").await;
-    let lost = processed(&worker, &source).await;
+    let lost = processed(&worker, &third).await;
     assert_ready(&lost, (320, 240));
     assert!(
         jobs_for(&pool, clips::ANALYSE_JOB, lost.id)
@@ -2098,9 +2107,10 @@ async fn a_long_job_keeps_its_lock(pool: PgPool) {
     small_video(&source, 1);
     let worker = Arc::new(worker(pool.clone()));
     let clip = uploaded_clip(&worker, &source).await;
-    // Held until the transcode wants to save it.
+    // Held until the transcode wants to save it. Not `FOR UPDATE`, which would hold it up
+    // sooner, at keeping the original's fingerprint (its foreign key reads the row).
     let mut hold = pool.begin().await.unwrap();
-    sqlx::query("SELECT 1 FROM clips WHERE id = $1 FOR UPDATE")
+    sqlx::query("SELECT 1 FROM clips WHERE id = $1 FOR NO KEY UPDATE")
         .bind(clip.id)
         .execute(&mut *hold)
         .await
@@ -2220,6 +2230,7 @@ async fn jobs_for_clips_they_dont_apply_to_do_nothing(pool: PgPool) {
         height: 480,
         fps: 30.0,
         metadata: json!({}),
+        playback_fingerprint: clipos_core::testing::fingerprint(clip),
     };
     clips::set_ready(&pool, clip, &transcoded).await.unwrap();
     assert!(worker.run_once().await.unwrap());

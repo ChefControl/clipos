@@ -51,6 +51,7 @@ pub fn api_router() -> OpenApiRouter<AppState> {
         .routes(routes!(routes::admin::list_users))
         .routes(routes!(routes::admin::update_user))
         .routes(routes!(routes::admin::analyse_clip))
+        .routes(routes!(routes::admin::list_duplicates))
         .routes(routes!(
             routes::clips::list_clips,
             routes::clips::create_clip
@@ -60,6 +61,7 @@ pub fn api_router() -> OpenApiRouter<AppState> {
             routes::clips::update_clip,
             routes::clips::delete_clip
         ))
+        .routes(routes!(routes::clips::check_upload))
         .routes(routes!(routes::clips::complete_clip))
         .routes(routes!(routes::clips::retry_clip))
         .routes(routes!(routes::clips::hold_clip))

@@ -23,6 +23,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+clipos-core = { workspace = true, features = ["test-util"] }
 serde_json.workspace = true
 tempfile = "3"
 tracing-subscriber.workspace = true

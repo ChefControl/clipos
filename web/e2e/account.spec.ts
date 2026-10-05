@@ -455,7 +455,59 @@ test.describe("admin", () => {
     const admin = await mockAdmin(page);
     admin.fail = { status: 403, message: "admins only" };
     await page.goto("/admin");
-    await expect(page.getByRole("alert")).toHaveText(["admins only", "admins only"]);
+    await expect(page.getByRole("alert")).toHaveText(["admins only", "admins only", "admins only"]);
+  });
+
+  test("copies of one file: keep the first, delete the rest", async ({ page }) => {
+    await open(page, "about:blank");
+    const first = { ...clips.long, reactionCount: 1 };
+    const copy = { ...clips.normal, uploader: { ...clips.normal.uploader, displayName: "Kim" } };
+    const held = { ...clips.processing, title: "Held copy", teaser: true };
+    let state = { groups: [[first, copy, held]], unchecked: 2 };
+    const deleted: string[] = [];
+    await page.route("**/api/admin/duplicates", (route) => json(route, state));
+    await page.route("**/api/clips/*", (route) => {
+      if (route.request().method() !== "DELETE") return route.fallback();
+      const id = new URL(route.request().url()).pathname.split("/").pop() as string;
+      deleted.push(id);
+      if (deleted.length === 1) {
+        return json(route, { error: "nope", message: "the file store didn't answer" }, 502);
+      }
+      state = { groups: [], unchecked: 0 };
+      return json(route, { ...copy, deletedAt: NOW });
+    });
+    await page.goto("/admin");
+    const group = page.getByRole("listitem", { name: `Copies of ${first.title}` });
+    await expect(page.getByText("1 file", { exact: true })).toBeVisible();
+    await expect(page.getByText("Kip is still checking 2 older clips")).toBeVisible();
+    const row = (title: string) => group.getByRole("listitem").filter({ hasText: title });
+    await expect(row(first.title)).toContainText("First upload");
+    await expect(row(first.title)).toContainText("1 reaction");
+    await expect(row(copy.title)).toContainText("Kim ·");
+    await expect(row(copy.title).getByRole("link", { name: copy.title })).toHaveAttribute(
+      "href",
+      `/clips/${copy.id}`,
+    );
+    // Saved for the show: not until it's posted.
+    await expect(row("Held copy")).toContainText("Can be deleted once it's posted");
+    await expect(row("Held copy").getByRole("button")).toHaveCount(0);
+
+    // Changed your mind: nothing happens.
+    page.once("dialog", (d) => d.dismiss());
+    await row(copy.title).getByRole("button", { name: "Delete" }).click();
+    expect(deleted).toEqual([]);
+
+    let asked = "";
+    page.on("dialog", (d) => {
+      asked = d.message();
+      return d.accept();
+    });
+    await row(copy.title).getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByRole("alert")).toHaveText("the file store didn't answer");
+    expect(asked).toBe(`Delete “${copy.title}” by Kim? It goes to their trash.`);
+    await row(copy.title).getByRole("button", { name: "Delete" }).click();
+    await expect(page.getByText("No duplicates.")).toBeVisible();
+    expect(deleted).toEqual([copy.id, copy.id]);
   });
 
   test("Copy invite link copies the sign-up link", async ({ page, context }) => {

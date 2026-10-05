@@ -407,6 +407,7 @@ pub(crate) mod tests {
                 height: 1080,
                 fps: 60.0,
                 metadata: serde_json::json!({}),
+                playback_fingerprint: crate::testing::fingerprint(clip.id),
             },
         )
         .await
@@ -682,7 +683,10 @@ pub(crate) mod tests {
         assert!(clips::get(&pool, id).await.unwrap().is_none());
         assert_eq!(clips::trash(&pool, sam).await.unwrap().len(), 1);
         assert!(clips::expired_trash(&pool).await.unwrap().is_empty());
-        assert!(clips::restore(&pool, id).await.unwrap());
+        assert_eq!(
+            clips::restore(&pool, id).await.unwrap(),
+            clips::Restore::Restored
+        );
         assert_eq!(
             clips::get(&pool, id).await.unwrap().unwrap().status,
             ClipStatus::Ready

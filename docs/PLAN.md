@@ -98,6 +98,7 @@ clipos/
 | `reactions` | `(clip_id, user_id, emoji)` pk | |
 | `share_links` | `token text pk` (22-char nanoid), `clip_id`, `created_by`, `created_at`, `revoked_at` | One active link per clip |
 | `jobs` | `id`, `kind (transcode\|analyse)`, `clip_id`, `status`, `attempts`, `run_after`, `locked_at`, `locked_by`, `last_error`, timestamps | Claimed with `FOR UPDATE SKIP LOCKED`; retries with exponential backoff, max 3 |
+| `clip_fingerprints` | `(clip_id, file (original\|playback))` pk, `bytes`, `sample_hash`, `content_hash` | One copy of a file (decision 55); only the worker writes them. `clips.duplicate_of` names the clip a refused upload copies |
 | `analysis_results` | `clip_id`, `analyser_version`, `raw jsonb`, `stats jsonb`, `corrected jsonb null`, `created_at` | Phase 8 |
 
 **Blob layout** (one storage account, private containers):
@@ -121,6 +122,7 @@ clipos/
 6. Disabling a user sets `status=disabled` → API returns 403 `account_disabled`. Revoking an invite also blocks sign-in (`not_invited`), even for someone who already joined. Either way their clips remain. Admins can't revoke, demote or disable themselves.
 
 ### Upload → transcode
+0. Before anything is created, the browser asks `POST /api/clips/check` whether the file is here already (decision 55): with its size and a hash of three 1 MiB samples (milliseconds), and, only if those match something, with a hash of all of it. A copy of anyone's clip isn't uploaded; one of your own clips in the trash is offered back ("Restore it" or "Upload it as new").
 1. `POST /api/clips` `{title, game_id, map, filename, bytes, content_type, my_pov}` → validates (≤ 2 GiB, allowed extension mp4/mkv/mov), creates clip `status=uploading`, returns a **user-delegation SAS** (create+write, that blob only, 2 h).
 2. Browser uploads blocks directly to `originals/…` with progress UI.
 3. `POST /api/clips/{id}/complete` → API HEADs the blob, checks size, sets `status=processing`, enqueues `transcode`.
@@ -150,6 +152,7 @@ GET    /healthz
 GET    /api/me                         PATCH /api/me  (display_name, handle, steam_name)
 GET    /api/users/{handle}             (profile + their clips)
 GET    /api/clips?game=&map=&uploader=&tag=&player=&sort=new|top&cursor=
+POST   /api/clips/check                (is this file here already? → new | verify | duplicate | inTrash)
 POST   /api/clips                      → {clip, upload_url}
 POST   /api/clips/{id}/complete
 GET    /api/clips/{id}                 PATCH /api/clips/{id}   DELETE /api/clips/{id}
@@ -162,6 +165,7 @@ GET    /api/me/trash                   GET /api/users  (members, no emails)
 GET    /api/tags                       (autocomplete)
 GET    /api/admin/invites              POST /api/admin/invites   POST /api/admin/invites/revoke  (email in body)
 GET    /api/admin/users                PATCH /api/admin/users/{id}  (role, status)
+GET    /api/admin/duplicates           (clips that are the same file, from before uploads were checked)
 POST   /internal/invites/check         (Auth0 Action only; shared-secret header; email in body)
 GET    /s/{token}  /s/{token}/video.mp4  /s/{token}/poster.jpg
 GET    /*                              (SPA fallback)
@@ -707,3 +711,4 @@ flowchart LR
 | 52 | **Maintenance stays with the worker** (decided 2026-10-03): requeue orphaned jobs on start; the janitor becomes a daily self-rescheduling job | Keeps domain work out of the orchestrator. Daily instead of hourly because each start of a 16 vCPU worker costs real money (hourly ≈ $14/month just for cleanup) |
 | 53 | **Prewarm on the picker click** (decided 2026-10-03, after the epic's first version): an upload intent that expires after 60 s, withdrawn by the file input's `cancel` event; uploads in flight, including a queue's next file, hold the worker until a size-based deadline (max 10 min) | Hides the ~30 s cold start behind the time spent in the file dialog and the upload. Intents are domain facts the orchestrator reads, so the api still never wakes the worker. A false start costs about 3 cents |
 | 54 | **User-assigned identities for the api, worker and orchestrator** (decided 2026-10-04), created by OpenTofu; the ACI worker reuses the worker's | System-assigned identities change when an app is recreated, and every change needs the bootstrap to re-point a Postgres role, which now has to run inside the VNet. With stable object IDs the bootstrap only has work for a new server or a new service, and the cutover from App Service to ACI keeps the worker's Postgres role |
+| 55 | **One copy of a file** (decided 2026-10-04): a file that's here already, byte for byte, isn't uploaded again, whoever uploaded it. The browser asks before uploading, with the size and a SHA-256 of three 1 MiB samples, and hashes the whole file (SHA-256 of 8 MiB blocks' SHA-256s, in parallel with Web Crypto) only when those match. The worker fingerprints every original and playback file and fails a copy it finds (`clips.duplicate_of`). A clip in the trash doesn't hold its file: its uploader is offered it back while it's restorable, anyone else uploads it as new, and restoring it once the file is here again is refused (`core::dedup`). Copies from before are fingerprinted by a backfill job and left as they are; the admin page lists them ("Duplicate clips") for an admin to delete the extra ones | Fast: a new file costs one 3 MiB read and one request, so only real copies pay for reading all of it. Exact: every check compares the file's own bytes, so a copy is never missed, and only a full hash match counts, so a different file is never refused. A re-encoded or trimmed copy is a different file; finding those would take perceptual hashes, which give a score, not a yes or no. The worker's check catches what the browser can't: two copies uploaded at once, or a client that didn't ask |

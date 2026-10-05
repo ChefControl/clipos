@@ -675,7 +675,7 @@ fn dropped_connection(e: &reqwest::Error) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::{Arc, Mutex};
 
     use axum::{

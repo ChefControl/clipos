@@ -1165,6 +1165,7 @@ mod tests {
                 height: 1080,
                 fps: 60.0,
                 metadata: serde_json::json!({}),
+                playback_fingerprint: crate::testing::fingerprint(clip),
             },
         )
         .await

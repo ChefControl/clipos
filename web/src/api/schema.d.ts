@@ -24,6 +24,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/duplicates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Clips that are the same file, uploaded before duplicates were refused (decision 55),
+         *     for an admin to delete the extra copies (`DELETE /api/clips/{id}`).
+         */
+        get: operations["list_duplicates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/invites": {
         parameters: {
             query?: never;
@@ -108,6 +128,29 @@ export interface paths {
         put?: never;
         /** Start an upload. */
         post: operations["create_clip"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/clips/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Is this file here already? Ask before uploading, with its size and samples (they take
+         *     milliseconds to hash), and with the hash of all of it only when the answer is `verify`.
+         *     A file that's here already as a clip that's processing or ready is a duplicate, whoever
+         *     uploaded it; one of your own in the trash can be restored instead; one past its week in
+         *     the trash, or someone else's in it, is new (decision 55).
+         */
+        post: operations["check_upload"];
         delete?: never;
         options?: never;
         head?: never;
@@ -691,6 +734,25 @@ export interface components {
             /** Format: uuid */
             clipId: string;
         };
+        /** @description A file about to be uploaded, by its fingerprint (`core::dedup`). */
+        CheckUpload: {
+            /**
+             * Format: int64
+             * @description File size.
+             */
+            bytes: number;
+            /**
+             * @description SHA-256 (hex) of the SHA-256 of each 8 MiB block of the file, in order. Only once
+             *     the answer to the samples was `verify`.
+             */
+            contentHash?: string | null;
+            /**
+             * @description SHA-256 (hex) of three 1 MiB samples of the file: its first MiB, the MiB starting at
+             *     `floor((bytes - 1 MiB) / 2)` and its last MiB; of the whole file when it's 3 MiB or
+             *     less.
+             */
+            sampleHash: string;
+        };
         ClipAnalysis: {
             /** @description Every kill in the killfeed, in order. */
             kills: components["schemas"]["KillView"][];
@@ -717,12 +779,18 @@ export interface components {
              */
             deletedAt?: string | null;
             description: string;
+            /**
+             * Format: uuid
+             * @description The clip with the same file, when it failed as a duplicate: only to its uploader,
+             *     and only when they may open that clip.
+             */
+            duplicateOf?: string | null;
             /** Format: int32 */
             durationMs?: number | null;
             /** @description Why processing failed. Only shown to the uploader. */
             error?: string | null;
             /** @description The kind of failure, for the uploader's failed screen. */
-            failureReason?: ("tooLong" | "notAVideo" | "unreadable" | "server") | null;
+            failureReason?: ("tooLong" | "notAVideo" | "unreadable" | "duplicate" | "server") | null;
             /** Format: float */
             fps?: number | null;
             gameId: string;
@@ -767,6 +835,19 @@ export interface components {
             uploader: components["schemas"]["Uploader"];
             /** Format: int32 */
             width?: number | null;
+        };
+        Copies: {
+            /**
+             * @description Clips that are the same file, each group oldest first; the newest groups first.
+             *     Only clips that are processing or ready and not in the trash.
+             */
+            groups: components["schemas"]["ClipView"][][];
+            /**
+             * Format: int64
+             * @description Clips whose file hasn't been fingerprinted yet (those from before duplicate
+             *     detection, until their `fingerprint` job runs): their copies aren't listed yet.
+             */
+            unchecked: number;
         };
         CreateClip: {
             /**
@@ -1096,6 +1177,12 @@ export interface components {
             role?: components["schemas"]["Role"] | null;
             status?: components["schemas"]["UserStatus"] | null;
         };
+        UploadCheck: {
+            clip?: components["schemas"]["ClipView"] | null;
+            result: components["schemas"]["UploadVerdict"];
+        };
+        /** @enum {string} */
+        UploadVerdict: "new" | "verify" | "duplicate" | "inTrash";
         Uploader: {
             avatarUrl?: string | null;
             displayName: string;
@@ -1188,6 +1275,44 @@ export interface operations {
             };
             /** @description The clip isn't published, or has no killfeed to read */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    list_duplicates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Clips that are copies of each other */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Copies"];
+                };
+            };
+            /** @description No token, or an invalid or expired one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not an admin */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1510,6 +1635,48 @@ export interface operations {
                 };
             };
             /** @description Invalid title, file type or size */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description No token, or an invalid or expired one */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    check_upload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckUpload"];
+            };
+        };
+        responses: {
+            /** @description What's here of it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadCheck"];
+                };
+            };
+            /** @description Bad size or hash */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2040,7 +2207,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description In the trash for over 7 days: being deleted */
+            /** @description In the trash for over 7 days: being deleted; or its file was uploaded again since */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -5,6 +5,7 @@ pub mod auth;
 pub mod azure;
 pub mod clips;
 pub mod db;
+pub mod dedup;
 pub mod invites;
 pub mod jobs;
 pub mod shares;
