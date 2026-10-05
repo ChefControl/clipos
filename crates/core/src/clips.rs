@@ -26,7 +26,7 @@ pub const ANALYSE_JOB: &str = "analyse";
 /// per clip, which 0013 moves to the background so uploads go first).
 pub const KEYFRAMES_JOB: &str = "keyframes";
 
-/// Fingerprints a clip from before duplicate detection (migration 0016): its original and
+/// Fingerprints a clip from before duplicate detection (migration 0017): its original and
 /// playback file.
 pub const FINGERPRINT_JOB: &str = "fingerprint";
 

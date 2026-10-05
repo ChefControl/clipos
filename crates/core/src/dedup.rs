@@ -427,7 +427,7 @@ pub async fn copies(pool: &sqlx::PgPool) -> sqlx::Result<Vec<Vec<Uuid>>> {
 }
 
 /// Clips that are here but have no fingerprint of their original yet: until the
-/// `fingerprint` jobs from migration 0016 have run, `copies` may miss theirs.
+/// `fingerprint` jobs from migration 0017 have run, `copies` may miss theirs.
 pub async fn unchecked(pool: &sqlx::PgPool) -> sqlx::Result<i64> {
     sqlx::query_scalar(concat!(
         "SELECT count(*) FROM clips c

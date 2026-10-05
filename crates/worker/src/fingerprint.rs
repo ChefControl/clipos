@@ -1,4 +1,4 @@
-//! `fingerprint` job: fingerprints a clip from before duplicate detection (migration 0016,
+//! `fingerprint` job: fingerprints a clip from before duplicate detection (migration 0017,
 //! decision 55), its original and its playback file, streamed from Blob Storage. New
 //! uploads are fingerprinted by their transcode.
 
