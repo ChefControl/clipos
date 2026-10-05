@@ -523,6 +523,20 @@
             }
           },
           {
+            "name": "night",
+            "in": "query",
+            "description": "`clip`: clips of the night. `fail`: clips someone pressed 🍌 on in a show. Only for\npeople the show is open to; for anyone else, no clips.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "The archive's show filters (S7).",
+              "enum": [
+                "clip",
+                "fail"
+              ]
+            }
+          },
+          {
             "name": "cursor",
             "in": "query",
             "description": "`nextCursor` from the previous page.",
@@ -3321,7 +3335,9 @@
           "reactions",
           "reactionCount",
           "createdAt",
-          "teaser"
+          "teaser",
+          "clipOfTheNight",
+          "failOfTheNight"
         ],
         "properties": {
           "autoTags": {
@@ -3334,6 +3350,10 @@
           "canEdit": {
             "type": "boolean",
             "description": "The viewer may edit and delete it (uploader or admin)."
+          },
+          "clipOfTheNight": {
+            "type": "boolean",
+            "description": "Won clip of the night in a show (for people the show is open to)."
           },
           "createdAt": {
             "type": "string",
@@ -3371,6 +3391,10 @@
               "null"
             ],
             "description": "Why processing failed. Only shown to the uploader."
+          },
+          "failOfTheNight": {
+            "type": "boolean",
+            "description": "Won fail of the night in a show (for people the show is open to)."
           },
           "failureReason": {
             "oneOf": [
@@ -3452,6 +3476,17 @@
               "null"
             ],
             "description": "Read SAS (2 h) once ready; only on the single-clip endpoints."
+          },
+          "playedIn": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PlayedInView",
+                "description": "The show it last played in; only on `GET /api/clips/{id}`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "players": {
             "type": "array",
@@ -3710,6 +3745,44 @@
           }
         }
       },
+      "FinaleView": {
+        "type": "object",
+        "description": "When each category of the finale vote runs, 20 s each (decision 31): every screen\ncounts down to the same moments.",
+        "required": [
+          "startedAt",
+          "clipFrom",
+          "clipUntil"
+        ],
+        "properties": {
+          "clipFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "clipUntil": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failFrom": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Fail of the night, first; none when nobody pressed 🍌 tonight."
+          },
+          "failUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "Invite": {
         "type": "object",
         "required": [
@@ -3827,6 +3900,26 @@
           "position": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "LostTo": {
+        "type": "object",
+        "required": [
+          "clipId",
+          "title",
+          "uploader"
+        ],
+        "properties": {
+          "clipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "uploader": {
+            "type": "string"
           }
         }
       },
@@ -4033,6 +4126,48 @@
           }
         }
       },
+      "PlayedInView": {
+        "type": "object",
+        "description": "The clip page's \"Played at Friday night show, Oct 2 · Clip 1 of 3 · lost the vote to\nSh15's clip\".",
+        "required": [
+          "showId",
+          "position",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lostTo": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LostTo",
+                "description": "Clip of the night, when it wasn't this one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "position": {
+            "type": "integer",
+            "format": "int64",
+            "description": "1-based, in the order the show played them."
+          },
+          "showId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "Profile": {
         "allOf": [
           {
@@ -4066,10 +4201,42 @@
                 "type": "string",
                 "format": "date-time",
                 "description": "When they first signed in."
+              },
+              "shows": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ProfileShows",
+                    "description": "Their shows: hosted, and the trophies their clips won. Only for people the show is\nopen to."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
           }
         ]
+      },
+      "ProfileShows": {
+        "type": "object",
+        "required": [
+          "hosted",
+          "trophies"
+        ],
+        "properties": {
+          "hosted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Shows they hosted that ended."
+          },
+          "trophies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Trophy"
+            },
+            "description": "Clips of theirs that won clip or fail of the night, newest show first."
+          }
+        }
       },
       "PublicConfig": {
         "type": "object",
@@ -4237,6 +4404,17 @@
             ],
             "format": "uuid"
           },
+          "finale": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FinaleView",
+                "description": "The vote's timing, from when the show went to its finale."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "host": {
             "$ref": "#/components/schemas/Member"
           },
@@ -4377,6 +4555,37 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "Trophy": {
+        "type": "object",
+        "required": [
+          "category",
+          "clip",
+          "showId"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "clip",
+              "fail"
+            ]
+          },
+          "clip": {
+            "$ref": "#/components/schemas/ClipView"
+          },
+          "showId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "showStartedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         }
       },

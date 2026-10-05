@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, formatDuration, shortDate, timeAgo, titleFromFilename } from "./format";
+import {
+  formatBytes,
+  formatDuration,
+  shortDate,
+  showName,
+  timeAgo,
+  titleFromFilename,
+} from "./format";
 
 describe("format", () => {
   it("formats sizes", () => {
@@ -45,5 +52,12 @@ describe("format", () => {
       new Date("2026-09-01T12:00:00Z").toLocaleDateString(),
     );
     expect(timeAgo("2026-10-01T12:00:30Z", now)).toBe("just now");
+  });
+});
+
+describe("showName", () => {
+  it("names a show after its night", () => {
+    expect(showName("2026-10-02T19:00:00")).toBe("Friday night show");
+    expect(showName(null)).toBe("The show");
   });
 });

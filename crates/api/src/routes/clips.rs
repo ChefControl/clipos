@@ -44,7 +44,7 @@ fn upload_ttl(bytes: i64) -> Duration {
     Duration::from_secs((15 + per_100_mb) * 60).min(Duration::from_secs(2 * 3600))
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Uploader {
     pub handle: String,
@@ -52,7 +52,7 @@ pub struct Uploader {
     pub avatar_url: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipView {
     pub id: Uuid,
@@ -105,6 +105,34 @@ pub struct ClipView {
     /// with a blurred poster. No tags, killfeed or reactions, and no playback except for
     /// people in the live show whose lineup has it (`GET /api/clips/{id}`, to preload it).
     pub teaser: bool,
+    /// Won clip of the night in a show (for people the show is open to).
+    pub clip_of_the_night: bool,
+    /// Won fail of the night in a show (for people the show is open to).
+    pub fail_of_the_night: bool,
+    /// The show it last played in; only on `GET /api/clips/{id}`.
+    pub played_in: Option<PlayedInView>,
+}
+
+/// The clip page's "Played at Friday night show, Oct 2 · Clip 1 of 3 · lost the vote to
+/// Sh15's clip".
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayedInView {
+    pub show_id: Uuid,
+    pub started_at: Option<DateTime<Utc>>,
+    /// 1-based, in the order the show played them.
+    pub position: i64,
+    pub count: i64,
+    /// Clip of the night, when it wasn't this one.
+    pub lost_to: Option<LostTo>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LostTo {
+    pub clip_id: Uuid,
+    pub title: String,
+    pub uploader: String,
 }
 
 fn can_edit(clip: &Clip, viewer: &User) -> bool {
@@ -147,6 +175,12 @@ pub(crate) async fn views(
     let mut players = social::players_for(&state.pool, &ids).await?;
     let mut reactions = social::reactions_for(&state.pool, &ids, viewer.id).await?;
     let mut share_tokens = shares::active_tokens(&state.pool, &ids).await?;
+    let (clips_of_the_night, fails_of_the_night) =
+        if crate::routes::shows::shows_open_to(state, viewer) {
+            clipos_core::shows::winners_among(&state.pool, &ids).await?
+        } else {
+            Default::default()
+        };
 
     let mut out = Vec::with_capacity(clips.len());
     for clip in clips {
@@ -227,6 +261,9 @@ pub(crate) async fn views(
                 None
             },
             teaser: false,
+            clip_of_the_night: clips_of_the_night.contains(&clip.id),
+            fail_of_the_night: fails_of_the_night.contains(&clip.id),
+            played_in: None,
         });
     }
     Ok(out)
@@ -284,11 +321,39 @@ async fn teaser_view(state: &AppState, clip: Clip) -> Result<ClipView, ApiError>
         share_url: None,
         held_until: None,
         teaser: true,
+        clip_of_the_night: false,
+        fail_of_the_night: false,
+        played_in: None,
     })
 }
 
 async fn view(state: &AppState, clip: Clip, viewer: &User) -> Result<ClipView, ApiError> {
-    Ok(views(state, vec![clip], viewer, true).await?.remove(0))
+    let mut view = views(state, vec![clip], viewer, true).await?.remove(0);
+    if crate::routes::shows::shows_open_to(state, viewer) {
+        view.played_in = played_in(state, view.id).await?;
+    }
+    Ok(view)
+}
+
+async fn played_in(state: &AppState, clip: Uuid) -> Result<Option<PlayedInView>, ApiError> {
+    let Some(p) = clipos_core::shows::played_in(&state.pool, clip).await? else {
+        return Ok(None);
+    };
+    let lost_to = match p.clip_winner_id.filter(|w| *w != clip) {
+        Some(w) => clips::get(&state.pool, w).await?.map(|c| LostTo {
+            clip_id: c.id,
+            title: c.title,
+            uploader: c.owner_display_name,
+        }),
+        None => None,
+    };
+    Ok(Some(PlayedInView {
+        show_id: p.show_id,
+        started_at: p.started_at,
+        position: p.position,
+        count: p.count,
+        lost_to,
+    }))
 }
 
 /// A clip the viewer may see: not deleted, or deleted but theirs to restore. Unfinished
@@ -718,6 +783,10 @@ pub struct ClipQuery {
     pub q: Option<String>,
     /// Clips someone reacted to with this emoji (one of the six reactions).
     pub reaction: Option<String>,
+    /// `clip`: clips of the night. `fail`: clips someone pressed 🍌 on in a show. Only for
+    /// people the show is open to; for anyone else, no clips.
+    #[param(inline)]
+    pub night: Option<clips::Night>,
     /// `nextCursor` from the previous page.
     pub cursor: Option<String>,
 }
@@ -767,7 +836,10 @@ pub async fn list_clips(
     let tags: Option<Vec<String>> =
         non_empty(q.tag).map(|t| t.split(',').filter_map(social::normalize_tag).collect());
     // Like a tag nobody used: `?tag=!!!` has no usable tag, and no tags would mean "any".
-    if tags.as_ref().is_some_and(Vec::is_empty) {
+    // Shows that don't exist for you have no clips of the night.
+    if tags.as_ref().is_some_and(Vec::is_empty)
+        || (q.night.is_some() && !crate::routes::shows::shows_open_to(&state, &user))
+    {
         return Ok(Json(ClipPage {
             clips: Vec::new(),
             next_cursor: None,
@@ -781,6 +853,7 @@ pub async fn list_clips(
         player: non_empty(q.player).map(|h| h.to_lowercase()),
         search: non_empty(q.q).map(|s| s.chars().take(100).collect()),
         reaction,
+        night: q.night,
     };
     let (clips, next) = clips::list(
         &state.pool,

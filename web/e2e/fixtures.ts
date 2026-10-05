@@ -17,6 +17,7 @@ const VIDEO = "/e2e-media/clip.mp4";
 /** 40 s of test pattern (VP9: Playwright's Chromium has no H.264), for the show tests. */
 const SHOW_VIDEO = "/e2e-media/show.webm";
 const NOW = "2026-10-01T12:00:00Z";
+const PAST_SHOW_ID = "20000000-0000-4000-8000-000000000000";
 
 export const me: User = {
   id: "00000000-0000-4000-8000-000000000001",
@@ -75,6 +76,8 @@ const base = {
   map: null,
   heldUntil: null,
   teaser: false,
+  clipOfTheNight: false,
+  failOfTheNight: false,
 } satisfies Partial<Clip>;
 
 export const clips = {
@@ -98,6 +101,15 @@ export const clips = {
     ],
     reactionCount: 7,
     shareUrl: "https://clips.spawnpoint.run/s/exampleShareToken12345",
+    // The last show's clip of the night (pastShow).
+    clipOfTheNight: true,
+    playedIn: {
+      showId: PAST_SHOW_ID,
+      startedAt: "2026-09-25T19:00:00Z",
+      position: 1,
+      count: 2,
+      lostTo: null,
+    },
   },
   normal: {
     ...base,
@@ -108,6 +120,19 @@ export const clips = {
     isMine: true,
     uploader: { handle: "robin", displayName: "Robin", avatarUrl: null },
     durationMs: 30_177,
+    // The last show's fail of the night (pastShow).
+    failOfTheNight: true,
+    playedIn: {
+      showId: PAST_SHOW_ID,
+      startedAt: "2026-09-25T19:00:00Z",
+      position: 2,
+      count: 2,
+      lostTo: {
+        clipId: "10000000-0000-4000-8000-000000000001",
+        title: "MedalTVCounterStrike220250408185133",
+        uploader: "Jamie Doe",
+      },
+    },
   },
   processing: {
     ...base,
@@ -200,7 +225,7 @@ export const show: Show = {
 
 /** The last show: the long clip won, the normal one was the fail. */
 export const pastShow: PastShow = {
-  id: "20000000-0000-4000-8000-000000000000",
+  id: PAST_SHOW_ID,
   host: { ...show.host },
   startedAt: "2026-09-25T19:00:00Z",
   endedAt: "2026-09-25T20:00:00Z",
@@ -397,7 +422,22 @@ export async function mockApi(page: Page, { meError }: { meError?: string } = {}
     if (profile) {
       const member = members.find((m) => m.handle === profile[1]);
       return member
-        ? json(route, { ...member, clipCount: 12, featuredCount: 3, fireCount: 17, joinedAt: NOW })
+        ? json(route, {
+            ...member,
+            clipCount: 12,
+            featuredCount: 3,
+            fireCount: 17,
+            joinedAt: NOW,
+            shows: {
+              hosted: member.handle === "robin" ? 1 : 0,
+              trophies: [
+                { category: "clip" as const, clip: clips.long },
+                { category: "fail" as const, clip: clips.normal },
+              ]
+                .filter((t) => t.clip.uploader.handle === member.handle)
+                .map((t) => ({ ...t, showId: PAST_SHOW_ID, showStartedAt: pastShow.startedAt })),
+            },
+          })
         : json(route, { error: "not_found", message: "not found" }, 404);
     }
     if (path === "/api/tags") return json(route, ["ace", "1v3-clutch"]);

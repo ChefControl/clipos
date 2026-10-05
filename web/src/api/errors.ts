@@ -1,11 +1,14 @@
 import type { components } from "./schema";
 
 type ErrorBody = components["schemas"]["ErrorBody"];
+type Ties = components["schemas"]["Ties"];
 
 /** A non-2xx API response. `code` is the stable `error` field (`not_invited`, …). */
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
+  /** Ending a show with a tied vote: the tied clips of each category (409). */
+  readonly tied: Ties | null;
 
   constructor(status: number, body: unknown) {
     const parsed = isErrorBody(body) ? body : undefined;
@@ -13,6 +16,7 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.code = parsed?.error ?? "unknown";
     this.status = status;
+    this.tied = parsed?.tied ?? null;
   }
 }
 

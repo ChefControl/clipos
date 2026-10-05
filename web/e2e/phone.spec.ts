@@ -56,7 +56,8 @@ test("clip page shows the killfeed: stats, your kills first, auto tags", async (
 
 test("feed cards show the multi-kill", async ({ page }) => {
   await open(page, "/");
-  const card = page.locator(`a[href="/clips/${clips.long.id}"]`).first();
+  // The feed's card: the past shows above it link the clip too.
+  const card = page.locator(`a[href="/clips/${clips.long.id}"]`).last();
   await expect(card.getByText("ace", { exact: true })).toBeVisible();
 });
 

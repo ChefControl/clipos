@@ -33,6 +33,13 @@ describe("call", () => {
     const err = new ApiError(502, "Bad Gateway");
     expect(err.code).toBe("unknown");
     expect(err.message).toBe("request failed (502)");
+    expect(err.tied).toBeNull();
+  });
+
+  it("keeps a tied vote's clips", () => {
+    const tied = { clip: ["a", "b"], fail: [] };
+    const err = new ApiError(409, { error: "conflict", message: "the vote is tied", tied });
+    expect(err.tied).toEqual(tied);
   });
 });
 

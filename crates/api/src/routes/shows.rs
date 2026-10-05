@@ -119,6 +119,19 @@ pub struct Voters {
     pub fail: Vec<Uuid>,
 }
 
+/// When each category of the finale vote runs, 20 s each (decision 31): every screen
+/// counts down to the same moments.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FinaleView {
+    pub started_at: DateTime<Utc>,
+    /// Fail of the night, first; none when nobody pressed 🍌 tonight.
+    pub fail_from: Option<DateTime<Utc>>,
+    pub fail_until: Option<DateTime<Utc>>,
+    pub clip_from: DateTime<Utc>,
+    pub clip_until: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ShowView {
@@ -143,6 +156,8 @@ pub struct ShowView {
     pub my_votes: MyVotes,
     pub clip_winner_id: Option<Uuid>,
     pub fail_winner_id: Option<Uuid>,
+    /// The vote's timing, from when the show went to its finale.
+    pub finale: Option<FinaleView>,
     /// Every reaction tap, in clip order and time, for the replay.
     pub reactions: Vec<ShowReactionView>,
 }
@@ -169,6 +184,7 @@ async fn show_view(state: &AppState, show: Show, viewer: &User) -> Result<ShowVi
         .into_iter()
         .map(|m| (m.id, m))
         .collect();
+    let fail_contenders = shows::fail_contenders(pool, show.id).await?;
     let votes = if show.status == ShowStatus::Ended {
         shows::tally(pool, show.id).await?
     } else {
@@ -227,7 +243,17 @@ async fn show_view(state: &AppState, show: Show, viewer: &User) -> Result<ShowVi
                 })
             })
             .collect(),
-        fail_contenders: shows::fail_contenders(pool, show.id).await?,
+        finale: show.finale_at.map(|at| {
+            let w = shows::vote_windows(at, !fail_contenders.is_empty());
+            FinaleView {
+                started_at: at,
+                fail_from: w.fail.map(|f| f.0),
+                fail_until: w.fail.map(|f| f.1),
+                clip_from: w.clip.0,
+                clip_until: w.clip.1,
+            }
+        }),
+        fail_contenders,
         votes: votes
             .into_iter()
             .map(|v| VoteCountView {

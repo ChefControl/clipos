@@ -74,3 +74,9 @@ export function shortDate(iso: string, now = new Date()): string {
     ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
   });
 }
+
+/** "Friday night show" for a show that started at `iso`. */
+export function showName(iso: string | null | undefined): string {
+  if (!iso) return "The show";
+  return `${new Date(iso).toLocaleDateString("en-US", { weekday: "long" })} night show`;
+}

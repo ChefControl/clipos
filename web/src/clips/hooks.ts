@@ -23,6 +23,8 @@ export interface ClipFilters {
   q?: string;
   /** One of EMOJIS. */
   reaction?: string;
+  /** Clips of the night, or fails (clips someone pressed 🍌 on in a show). */
+  night?: "clip" | "fail";
 }
 
 /** Pages of clips for the archive and profiles. Refreshes while one of yours is processing. */

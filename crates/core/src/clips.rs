@@ -386,6 +386,19 @@ pub struct Filter {
     pub search: Option<String>,
     /// Clips someone reacted to with this emoji.
     pub reaction: Option<String>,
+    /// Clips of the night, or fails: clips someone pressed 🍌 on in a show that ended
+    /// (decision 30; the winners among them carry the badge).
+    pub night: Option<Night>,
+}
+
+/// The archive's show filters (S7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Night {
+    /// Won clip of the night.
+    Clip,
+    /// Got a 🍌 in a show.
+    Fail,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, ToSchema)]
@@ -480,7 +493,13 @@ macro_rules! feed_where {
            AND ($11::text IS NULL OR c.title ILIKE $11 OR c.description ILIKE $11
                 OR c.map ILIKE $11 OR u.display_name ILIKE $11 OR u.handle ILIKE $11)
            AND ($12::text IS NULL OR EXISTS (
-                 SELECT FROM reactions r WHERE r.clip_id = c.id AND r.emoji = $12)) "
+                 SELECT FROM reactions r WHERE r.clip_id = c.id AND r.emoji = $12))
+           AND ($13::text IS NULL
+                OR ($13 = 'clip' AND EXISTS (
+                     SELECT FROM shows s WHERE s.status = 'ended' AND s.clip_winner_id = c.id))
+                OR ($13 = 'fail' AND EXISTS (
+                     SELECT FROM show_reactions sr JOIN shows s ON s.id = sr.show_id
+                      WHERE sr.clip_id = c.id AND sr.emoji = '🍌' AND s.status = 'ended'))) "
         )
     };
 }
@@ -532,6 +551,10 @@ pub async fn list(
         .bind(limit + 1)
         .bind(filter.search.as_deref().map(like_pattern))
         .bind(&filter.reaction)
+        .bind(filter.night.map(|n| match n {
+            Night::Clip => "clip",
+            Night::Fail => "fail",
+        }))
         .fetch_all(pool)
         .await?;
     let next = if clips.len() as i64 > limit {
