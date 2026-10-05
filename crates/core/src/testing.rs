@@ -3,6 +3,21 @@
 use std::time::{Duration, Instant};
 
 use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::dedup::Fingerprint;
+
+/// A playback file's fingerprint that no other clip's has, for a test that makes `clip`
+/// ready.
+pub fn fingerprint(clip: Uuid) -> Fingerprint {
+    let mut content_hash = [0; 32];
+    content_hash[..16].copy_from_slice(clip.as_bytes());
+    Fingerprint {
+        bytes: 1000,
+        sample_hash: content_hash,
+        content_hash,
+    }
+}
 
 /// Waits (at most 5 s) until another connection to this database is blocked on a lock:
 /// a test that holds a row lock then knows the statement it races has got that far.

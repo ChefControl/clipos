@@ -387,3 +387,253 @@ test("left mid-queue, the rest go up in the background and say so", async ({ pag
   release();
   await expect(page.getByRole("status")).toHaveText("2 clips are up. Kip's getting them ready.");
 });
+
+// Files that are here already (decision 55): the browser asks before uploading, by the
+// file's samples and then by all of it, and uploads nothing that's here.
+
+const DELETED = "2026-10-01T12:00:00Z";
+
+/** Answers `POST /api/clips/check` with `answer(body)`, and records what was asked. */
+async function checks(
+  page: Page,
+  answer: (body: { bytes: number; sampleHash: string; contentHash?: string }) => unknown,
+) {
+  const asked: { bytes: number; sampleHash: string; contentHash?: string }[] = [];
+  await page.route("**/api/clips/check", (route) => {
+    const body = route.request().postDataJSON();
+    asked.push(body);
+    return route.fulfill({ json: answer(body) });
+  });
+  return asked;
+}
+
+test("a file that's here already isn't uploaded, and says where it is", async ({ page }) => {
+  await open(page, "/upload");
+  const seen = steps(page);
+  // Its samples match something; all of it is compared before the answer.
+  let compared = () => {};
+  const comparing = new Promise<void>((r) => {
+    compared = r;
+  });
+  const asked: { contentHash?: string }[] = [];
+  await page.route("**/api/clips/check", async (route) => {
+    const body = route.request().postDataJSON();
+    asked.push(body);
+    if (!body.contentHash) return route.fulfill({ json: { result: "verify", clip: null } });
+    await comparing;
+    return route.fulfill({ json: { result: "duplicate", clip: clips.long } });
+  });
+  await pick(page, video("ace.mp4"));
+  await expect(page.getByText("Comparing it with a clip that looks the same… 100%")).toBeVisible();
+  compared();
+
+  await expect(page.getByRole("heading", { name: "It's here already." })).toBeVisible();
+  await expect(
+    page.getByText(`Jamie Doe uploaded this exact file already, as “${clips.long.title}”.`, {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open it" })).toHaveAttribute(
+    "href",
+    `/clips/${clips.long.id}`,
+  );
+  // Nothing to fill in, and nothing was uploaded.
+  await expect(page.getByRole("button", { name: "Save details" })).toHaveCount(0);
+  expect(seen).toEqual([]);
+  expect(asked).toEqual([
+    { bytes: 64 * 1024, sampleHash: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    {
+      bytes: 64 * 1024,
+      sampleHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      contentHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    },
+  ]);
+
+  await page.getByRole("button", { name: "Choose another file" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Drop a clip anywhere on this page" }),
+  ).toBeVisible();
+});
+
+test("a copy you can't open is only said", async ({ page }) => {
+  await open(page, "/upload");
+  let clip: unknown = null;
+  await checks(page, () => ({ result: "duplicate", clip }));
+  await pick(page, video("processing.mp4"));
+  await expect(
+    page.getByText("Someone uploaded this exact file already. It shows up once it's ready.", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open it" })).toHaveCount(0);
+
+  // Someone's clip saved for the show: who, but nothing to open until it plays.
+  clip = { ...clips.long, teaser: true };
+  await page.getByRole("button", { name: "Choose another file" }).click();
+  await pick(page, video("held.mp4"));
+  await expect(
+    page.getByText("Jamie Doe uploaded this exact file already. It's saved for the show.", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open it" })).toHaveCount(0);
+});
+
+test("cancelled while it checks, nothing is created", async ({ page }) => {
+  await open(page, "/upload");
+  const seen = steps(page);
+  await page.route("**/api/clips/check", () => {});
+  const asking = page.waitForRequest("**/api/clips/check");
+  await pick(page, video("ace.mp4"));
+  await asking;
+  await expect(page.getByText("Checking it isn't here already…")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Drop a clip anywhere on this page" }),
+  ).toBeVisible();
+  expect(seen).toEqual([]);
+});
+
+test("a file in your trash: restore it, which can fail", async ({ page }) => {
+  await open(page, "/upload");
+  await checks(page, () => ({ result: "inTrash", clip: { ...clips.normal, deletedAt: DELETED } }));
+  let tries = 0;
+  await page.route(`**/api/clips/${clips.normal.id}/restore`, (route) =>
+    ++tries === 1
+      ? route.fulfill(failWith(409, "the same file was uploaded again since"))
+      : route.fulfill({ json: clips.normal }),
+  );
+  await pick(page, video("ace.mp4"));
+  await expect(page.getByRole("heading", { name: "It's in your trash." })).toBeVisible();
+  await expect(
+    page.getByText(`You deleted this exact file, “${clips.normal.title}”`),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Restore it" }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Couldn't restore it: the same file was uploaded again since",
+  );
+  await page.getByRole("button", { name: "Restore it" }).click();
+  await expect(page).toHaveURL(new RegExp(`/clips/${clips.normal.id}$`));
+});
+
+test("a file in your trash can be uploaded as new instead", async ({ page }) => {
+  await open(page, "/upload");
+  const seen = steps(page);
+  const asked = await checks(page, () => ({ result: "inTrash", clip: clips.normal }));
+  await pick(page, video("ace.mp4"));
+  await expect(
+    page.getByText(`“${clips.normal.title}”, recently.`, { exact: false }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Upload it as new" }).click();
+  await expect(page.getByText(/Uploaded ✓/)).toBeVisible();
+  expect(seen).toEqual(["create:ace.mp4", "complete"]);
+  expect(asked).toHaveLength(1);
+});
+
+test("left while it checks, a file that's here already is said where you are", async ({ page }) => {
+  await open(page, "/upload");
+  for (const [result, says] of [
+    ["duplicate", "copy.mp4 is here already, so it wasn't uploaded."],
+    ["inTrash", "copy.mp4 is in your trash. Restore it from Trash on your profile."],
+  ] as const) {
+    let answer = () => {};
+    const answered = new Promise<void>((r) => {
+      answer = r;
+    });
+    await page.route("**/api/clips/check", async (route) => {
+      await answered;
+      await route.fulfill({ json: { result, clip: clips.normal } });
+    });
+    const asking = page.waitForRequest("**/api/clips/check");
+    await page.goto("/upload");
+    await pick(page, video("copy.mp4"));
+    await asking;
+    await page.getByRole("navigation").getByRole("link", { name: "Archive" }).click();
+    await page
+      .getByRole("dialog", { name: "Leave while it uploads?" })
+      .getByRole("button", { name: "Leave and keep uploading" })
+      .click();
+    await expect(page.getByRole("heading", { name: "Archive" })).toBeVisible();
+    answer();
+    await expect(page.getByRole("status")).toHaveText(says);
+    await page.unroute("**/api/clips/check");
+  }
+});
+
+test("in a queue, copies aren't uploaded: open, restore or upload them as new", async ({
+  page,
+}) => {
+  await open(page, "/upload");
+  const seen = steps(page);
+  // Told apart by their sizes.
+  const answers: Record<number, unknown> = {
+    [64 * 1024 + 1]: { result: "duplicate", clip: clips.long },
+    [64 * 1024 + 2]: { result: "inTrash", clip: { ...clips.normal, deletedAt: DELETED } },
+    [64 * 1024 + 3]: { result: "inTrash", clip: { ...clips.processing, deletedAt: DELETED } },
+  };
+  await checks(page, ({ bytes }) => answers[bytes] ?? { result: "new", clip: null });
+  let restores = 0;
+  await page.route(`**/api/clips/*/restore`, (route) =>
+    ++restores === 1
+      ? route.fulfill(failWith(409, "the same file was uploaded again since"))
+      : route.fulfill({ json: clips.normal }),
+  );
+  await page
+    .locator("input[type=file]")
+    .setInputFiles([
+      video("new.mp4"),
+      video("copy.mp4", 64 * 1024 + 1),
+      video("trashed.mp4", 64 * 1024 + 2),
+      video("again.mp4", 64 * 1024 + 3),
+    ]);
+  const rows = page.getByRole("list", { name: "Uploads" }).getByRole("listitem");
+  await expect(rows.nth(1)).toContainText("Not uploaded: it's here already.");
+  await expect(rows.nth(2)).toContainText(
+    `Not uploaded: it's in your trash, as “${clips.normal.title}”.`,
+  );
+  // The copy isn't counted; the ones in the trash wait for you.
+  await expect(page.getByText("1 of 3 up.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open the clip copy.mp4 is" })).toHaveAttribute(
+    "href",
+    `/clips/${clips.long.id}`,
+  );
+
+  await page.getByRole("button", { name: "Restore trashed.mp4 from your trash" }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    `Couldn't restore ${clips.normal.title}: the same file was uploaded again since`,
+  );
+  await page.getByRole("button", { name: "Restore trashed.mp4 from your trash" }).click();
+  await expect(rows.nth(2)).toContainText(`Restored ✓ · “${clips.normal.title}” is back`);
+  await expect(page.getByRole("link", { name: "Open the clip trashed.mp4 is" })).toBeVisible();
+  await expect(page.getByText("2 of 3 up.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Upload again.mp4 as new" }).click();
+  await expect(page.getByText("3 of 3 up.")).toBeVisible();
+  expect(seen).toEqual(["create:new.mp4", "complete", "create:again.mp4", "complete"]);
+});
+
+test("left mid-queue, copies that weren't uploaded are said too", async ({ page }) => {
+  await open(page, "/upload");
+  await checks(page, ({ bytes }) =>
+    bytes === 64 * 1024 ? { result: "new", clip: null } : { result: "duplicate", clip: null },
+  );
+  const release = await holdBlob(page);
+  const uploading = page.waitForRequest("**/e2e-blob/**");
+  await page
+    .locator("input[type=file]")
+    .setInputFiles([video("a.mp4"), video("b.mp4", 64 * 1024 + 1), video("c.mp4", 64 * 1024 + 2)]);
+  await uploading;
+  await page.getByRole("navigation").getByRole("link", { name: "Archive" }).click();
+  await page
+    .getByRole("dialog", { name: "Leave while they upload?" })
+    .getByRole("button", { name: "Leave and keep uploading" })
+    .click();
+  await expect(page.getByRole("heading", { name: "Archive" })).toBeVisible();
+  release();
+  await expect(page.getByRole("status").first()).toHaveText(
+    "2 files were here already, so they weren't uploaded.",
+  );
+  await expect(page.getByRole("status").last()).toHaveText(
+    "1 clip is up. Kip's getting them ready.",
+  );
+});

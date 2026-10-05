@@ -10,7 +10,7 @@ use sqlx::PgPool;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::jobs;
+use crate::{dedup, jobs};
 
 /// Upload size limit (2 GiB).
 pub const MAX_BYTES: i64 = 2 * 1024 * 1024 * 1024;
@@ -25,6 +25,10 @@ pub const ANALYSE_JOB: &str = "analyse";
 /// it if not (S5c: clips from before the show's 2 s keyframes; migration 0011 queues one
 /// per clip, which 0013 moves to the background so uploads go first).
 pub const KEYFRAMES_JOB: &str = "keyframes";
+
+/// Fingerprints a clip from before duplicate detection (migration 0017): its original and
+/// playback file.
+pub const FINGERPRINT_JOB: &str = "fingerprint";
 
 /// Deletes blobs no clip points at any more, e.g. the files a re-encode replaced, once
 /// every read link to them has expired. Payload: `{"blobs": [{"container", "blob"}]}`.
@@ -55,6 +59,8 @@ pub enum FailureReason {
     NotAVideo,
     /// Not readable as video: incomplete or corrupt, or changed after the upload finished.
     Unreadable,
+    /// The same file is here already, as another clip (`Clip::duplicate_of`).
+    Duplicate,
     /// Something on our side; retrying may help.
     Server,
 }
@@ -65,6 +71,8 @@ pub const UNREADABLE_ERROR: &str = "the file isn't a video we can read";
 /// The original was written again after `complete` (the upload link is still valid for a
 /// while), so it's no longer the file that was checked. Uploading again is the way out.
 pub const CHANGED_ERROR: &str = "the file changed after the upload finished";
+/// The same file is here already (decision 55).
+pub const DUPLICATE_ERROR: &str = "this exact file is here already";
 
 impl FailureReason {
     pub fn of(error: &str) -> Self {
@@ -74,6 +82,8 @@ impl FailureReason {
             Self::NotAVideo
         } else if error.starts_with(UNREADABLE_ERROR) || error.starts_with(CHANGED_ERROR) {
             Self::Unreadable
+        } else if error.starts_with(DUPLICATE_ERROR) {
+            Self::Duplicate
         } else {
             Self::Server
         }
@@ -112,6 +122,8 @@ pub struct Clip {
     /// The original's ETag when its upload was completed (see `set_original_etag`). NULL
     /// for clips completed before it was kept.
     pub original_etag: Option<String>,
+    /// The clip with the same file, when the worker refused this one for it.
+    pub duplicate_of: Option<Uuid>,
 }
 
 impl Clip {
@@ -128,7 +140,7 @@ macro_rules! clip_select {
                 c.my_pov, c.status, c.original_blob, c.original_filename, c.original_bytes,
                 c.playback_blob, c.poster_blob, c.duration_ms, c.width, c.height, c.fps,
                 c.error, c.reaction_count, c.created_at, c.deleted_at, c.hold_until,
-                c.original_etag
+                c.original_etag, c.duplicate_of
            FROM clips c JOIN users u ON u.id = c.owner_id "
     };
 }
@@ -163,6 +175,8 @@ pub struct Transcoded {
     pub height: i32,
     pub fps: f32,
     pub metadata: Value,
+    /// Of the playback file, kept with it (`dedup`).
+    pub playback_fingerprint: dedup::Fingerprint,
 }
 
 /// The playback file of a clip's first transcode.
@@ -642,15 +656,27 @@ pub async fn soft_delete(pool: &PgPool, id: Uuid) -> sqlx::Result<bool> {
     Ok(deleted)
 }
 
+/// What came of `restore`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restore {
+    Restored,
+    /// Not in the trash, or in it for longer than `TRASH_DAYS`.
+    NotRestorable,
+    /// Its file is here again as this clip (decision 55), so it stays in the trash.
+    Duplicate(Uuid),
+}
+
 /// Brings a clip back from the trash, within `TRASH_DAYS`. After that the janitor may be
-/// deleting its files (`expired_trash`), so it stays in the trash: false.
+/// deleting its files (`expired_trash`), so it stays in the trash. So does a clip whose
+/// file was uploaded again since, as another clip: one copy is kept.
 ///
 /// The worker drops the transcode of a clip in the trash, so a clip deleted while it was
 /// processing gets a new one, unless one is still queued. One already running may be
 /// about to drop the clip too; if it transcodes it instead, the new job finds the clip
 /// ready and does nothing.
-pub async fn restore(pool: &PgPool, id: Uuid) -> sqlx::Result<bool> {
+pub async fn restore(pool: &PgPool, id: Uuid) -> sqlx::Result<Restore> {
     let mut tx = pool.begin().await?;
+    dedup::lock(&mut tx).await?;
     let status: Option<ClipStatus> = sqlx::query_scalar(
         "UPDATE clips SET deleted_at = NULL, updated_at = now()
           WHERE id = $1 AND deleted_at >= now() - make_interval(days => $2)
@@ -661,8 +687,11 @@ pub async fn restore(pool: &PgPool, id: Uuid) -> sqlx::Result<bool> {
     .fetch_optional(&mut *tx)
     .await?;
     let Some(status) = status else {
-        return Ok(false);
+        return Ok(Restore::NotRestorable);
     };
+    if let Some(other) = dedup::held_elsewhere(&mut tx, id).await? {
+        return Ok(Restore::Duplicate(other));
+    }
     if status == ClipStatus::Processing {
         let queued: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM jobs
@@ -677,7 +706,7 @@ pub async fn restore(pool: &PgPool, id: Uuid) -> sqlx::Result<bool> {
         }
     }
     tx.commit().await?;
-    Ok(true)
+    Ok(Restore::Restored)
 }
 
 /// Blobs of a clip to delete before purging its row.
@@ -733,9 +762,11 @@ pub async fn mark_uploaded(pool: &PgPool, id: Uuid) -> sqlx::Result<bool> {
     Ok(moved)
 }
 
-/// Points the clip at its transcoded files. Returns false if the row is gone (purged
-/// meanwhile), so the caller can delete the files it uploaded.
+/// Points the clip at its transcoded files, with the playback file's fingerprint. Returns
+/// false if the row is gone (purged meanwhile), so the caller can delete the files it
+/// uploaded.
 pub async fn set_ready(pool: &PgPool, id: Uuid, t: &Transcoded) -> sqlx::Result<bool> {
+    let mut tx = pool.begin().await?;
     let updated = sqlx::query(
         "UPDATE clips SET status = 'ready', playback_blob = $2, poster_blob = $3,
                 duration_ms = $4, width = $5, height = $6, fps = $7, metadata = $8,
@@ -750,10 +781,15 @@ pub async fn set_ready(pool: &PgPool, id: Uuid, t: &Transcoded) -> sqlx::Result<
     .bind(t.height)
     .bind(t.fps)
     .bind(&t.metadata)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
-    Ok(updated == 1)
+    if updated == 0 {
+        return Ok(false);
+    }
+    dedup::record(&mut *tx, id, dedup::File::Playback, &t.playback_fingerprint).await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Marks a processing clip failed. A clip that's ready already (another run of its
@@ -838,6 +874,7 @@ mod tests {
             F::of("the file changed after the upload finished"),
             F::Unreadable
         );
+        assert_eq!(F::of("this exact file is here already"), F::Duplicate);
         assert_eq!(
             F::of("processing failed after 3 attempts (timeout)"),
             F::Server
@@ -948,6 +985,7 @@ mod tests {
                 height: 1080,
                 fps: 60.0,
                 metadata: json!({}),
+                playback_fingerprint: crate::testing::fingerprint(clip.id),
             },
         )
         .await
@@ -983,7 +1021,7 @@ mod tests {
 
         // Still queued: restored as is.
         assert!(soft_delete(&pool, clip.id).await.unwrap());
-        assert!(restore(&pool, clip.id).await.unwrap());
+        assert_eq!(restore(&pool, clip.id).await.unwrap(), Restore::Restored);
         assert_eq!(queued_transcodes(&pool).await, 1);
 
         // The worker found it in the trash and dropped the job.
@@ -991,8 +1029,12 @@ mod tests {
         let job = jobs::claim(&pool, "w").await.unwrap().unwrap();
         assert!(jobs::complete(&pool, &job, "w").await.unwrap());
         assert_eq!(queued_transcodes(&pool).await, 0);
-        assert!(restore(&pool, clip.id).await.unwrap());
-        assert!(!restore(&pool, clip.id).await.unwrap(), "not in the trash");
+        assert_eq!(restore(&pool, clip.id).await.unwrap(), Restore::Restored);
+        assert_eq!(
+            restore(&pool, clip.id).await.unwrap(),
+            Restore::NotRestorable,
+            "not in the trash"
+        );
         let job = jobs::claim(&pool, "w").await.unwrap().unwrap();
         assert_eq!(
             (job.kind.as_str(), &job.payload),
@@ -1011,12 +1053,13 @@ mod tests {
                 height: 1080,
                 fps: 60.0,
                 metadata: json!({}),
+                playback_fingerprint: crate::testing::fingerprint(clip.id),
             },
         )
         .await
         .unwrap();
         assert!(soft_delete(&pool, clip.id).await.unwrap());
-        assert!(restore(&pool, clip.id).await.unwrap());
+        assert_eq!(restore(&pool, clip.id).await.unwrap(), Restore::Restored);
         assert_eq!(queued_transcodes(&pool).await, 0);
     }
 

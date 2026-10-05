@@ -839,6 +839,10 @@ function Failed({ clip, onDelete }: { clip: Clip; onDelete: () => void }) {
       "Kip can't read that file.",
       "It may be cut off or corrupt. Export it again from your recorder and upload that.",
     ],
+    duplicate: [
+      "It's here already.",
+      "This exact file was uploaded already, as another clip. One copy is plenty, so this one can go.",
+    ],
     server: ["Something broke on our side.", "Try again in a moment."],
   }[clip.failureReason ?? "server"];
   const own = clip.isMine;
@@ -856,7 +860,17 @@ function Failed({ clip, onDelete }: { clip: Clip; onDelete: () => void }) {
         <p className="max-w-lg text-[17px] text-soft">{body}</p>
         <div className="mt-2 flex flex-wrap gap-2">
           {own &&
-            (clip.failureReason && clip.failureReason !== "server" ? (
+            (clip.failureReason === "duplicate" ? (
+              clip.duplicateOf && (
+                <Link
+                  to="/clips/$clipId"
+                  params={{ clipId: clip.duplicateOf }}
+                  className={buttonClass("primary", "lg")}
+                >
+                  Open that one
+                </Link>
+              )
+            ) : clip.failureReason && clip.failureReason !== "server" ? (
               <Link to="/upload" className={buttonClass("primary", "lg")}>
                 {clip.failureReason === "tooLong" ? "Upload a shorter one" : "Upload another file"}
               </Link>

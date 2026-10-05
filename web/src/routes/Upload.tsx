@@ -11,9 +11,10 @@ import {
 } from "react";
 import { call } from "../api/errors";
 import { useApi } from "../auth/ApiProvider";
-import { useMembers } from "../clips/hooks";
+import { type Clip, useMembers, useRestoreClip } from "../clips/hooks";
 import { Kip } from "../kip/Kip";
-import { formatBytes, formatDuration, titleFromFilename } from "../lib/format";
+import { findCopy } from "../lib/fingerprint";
+import { formatBytes, formatDuration, timeAgo, titleFromFilename } from "../lib/format";
 import { CS2_MAPS } from "../lib/maps";
 import { type UploadProgress, uploadToBlob } from "../lib/upload";
 import { useTitle } from "../lib/useTitle";
@@ -31,6 +32,14 @@ const LIMITS =
   ".mp4, .mkv or .mov, up to 2 GB and 5 minutes. Straight from ShadowPlay, Medal or OBS.";
 
 type Phase =
+  /** Making sure it isn't here already; `hashed` (0 to 1) once it's compared in full. */
+  | { kind: "checking"; hashed: number | null }
+  /** It's here already, as `clip` when you may open it: not uploaded. */
+  | { kind: "duplicate"; clip: Clip | null }
+  /** It's one of your clips in the trash: restore it, or upload it as new. */
+  | { kind: "inTrash"; clip: Clip }
+  /** Restored from the trash instead of uploading it. */
+  | { kind: "restored"; clip: Clip }
   | { kind: "starting" }
   | { kind: "uploading"; progress: UploadProgress; startedAt: number }
   | { kind: "finishing" }
@@ -65,6 +74,19 @@ function rejection(file: File): Rejection | null {
 }
 
 type Mode = { kind: "pick" } | { kind: "one"; file: File } | { kind: "batch"; files: File[] };
+
+/** Asks whether `file` is here already (decision 55): by its samples, then, if they match
+ *  something, by all of it. */
+function useFindCopy() {
+  const api = useApi();
+  return (file: File, onHashing: (fraction: number) => void, signal: AbortSignal) =>
+    findCopy(
+      file,
+      (body) => call(api.POST("/api/clips/check", { body, signal })),
+      onHashing,
+      signal,
+    );
+}
 
 // Upload (canvas 3.1). Picking a file starts the upload straight away; the details are
 // filled in beside it while it goes, and saved to the clip with "Save details". Picking
@@ -298,7 +320,8 @@ function Uploading({
   }, [holdDefault]);
   // Friends in the clip: everyone but you.
   const friends = members.data?.filter((m) => m.id !== me?.id) ?? [];
-  const [phase, setPhase] = useState<Phase>({ kind: "starting" });
+  const findCopy = useFindCopy();
+  const [phase, setPhase] = useState<Phase>({ kind: "checking", hashed: null });
   const [clipId, setClipId] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
 
@@ -334,7 +357,12 @@ function Uploading({
   };
 
   const uploading =
-    phase.kind === "starting" || phase.kind === "uploading" || phase.kind === "finishing";
+    phase.kind === "checking" ||
+    phase.kind === "starting" ||
+    phase.kind === "uploading" ||
+    phase.kind === "finishing";
+  /** Not uploaded, as it's here already: there are no details to fill in. */
+  const found = phase.kind === "duplicate" || phase.kind === "inTrash";
   useEffect(() => {
     onBusy(uploading);
     return () => onBusy(false);
@@ -374,21 +402,37 @@ function Uploading({
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  // Start uploading as soon as the file is picked: once per file (the component is keyed
-  // by it), even when React runs the effect twice in development. Only Cancel stops it;
-  // moving to another page lets it finish, as before. A cancelled upload's clip goes to
-  // the trash, so no half-uploaded clip is left behind.
-  const started = useRef(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: see above.
-  useEffect(() => {
-    if (started.current) return;
-    started.current = true;
+  /** Uploads the file, once it's made sure it isn't here already, unless `check` is false
+   *  (it's in your trash, and you're uploading it as new anyway). Only Cancel stops it;
+   *  moving to another page lets it finish, as before. A cancelled upload's clip goes to
+   *  the trash, so no half-uploaded clip is left behind. */
+  const start = (check: boolean) => {
     const controller = new AbortController();
     const { signal } = controller;
     abort.current = controller;
     let id: string | null = null;
     (async () => {
       try {
+        if (check) {
+          const copy = await findCopy(
+            file,
+            (hashed) => setPhase({ kind: "checking", hashed }),
+            signal,
+          );
+          if (copy.result === "duplicate") {
+            setPhase({ kind: "duplicate", clip: copy.clip ?? null });
+            if (left.current) toast(`${file.name} is here already, so it wasn't uploaded.`);
+            return;
+          }
+          if (copy.result === "inTrash" && copy.clip) {
+            setPhase({ kind: "inTrash", clip: copy.clip });
+            if (left.current) {
+              toast(`${file.name} is in your trash. Restore it from Trash on your profile.`);
+            }
+            return;
+          }
+        }
+        setPhase({ kind: "starting" });
         const created = await call(
           api.POST("/api/clips", {
             body: {
@@ -432,6 +476,16 @@ function Uploading({
         if (left.current) toast(`Couldn't upload ${file.name}: ${errorText(err)}`, "danger");
       }
     })();
+  };
+
+  // Start as soon as the file is picked: once per file (the component is keyed by it),
+  // even when React runs the effect twice in development.
+  const started = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above.
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    start(true);
   }, []);
 
   // The hold switch goes to the clip as soon as it changes (and once the clip exists).
@@ -512,9 +566,12 @@ function Uploading({
                 ` · ${formatDuration(durationMs)}`}
             </span>
           </div>
-          <div className="px-1">
-            <UploadState phase={phase} total={file.size} />
-          </div>
+          {/* Found here already: the panel beside it says so. */}
+          {!found && (
+            <div className="px-1">
+              <UploadState phase={phase} total={file.size} />
+            </div>
+          )}
           <div className="flex items-center gap-2.5 px-1">
             {uploading ? (
               <>
@@ -529,7 +586,7 @@ function Uploading({
                   Cancel
                 </Button>
               </>
-            ) : phase.kind === "error" ? (
+            ) : phase.kind === "error" || found ? (
               <Button className="ml-auto" onClick={onRestart}>
                 Choose another file
               </Button>
@@ -540,126 +597,134 @@ function Uploading({
             )}
           </div>
         </div>
-        <div className="squircle flex items-center gap-3.5 rounded-[22px] bg-white/4 py-3.5 pr-4.5 pl-2.5">
-          <Kip className="h-14 w-14 shrink-0" />
-          <p className="text-sm leading-relaxed text-soft">
-            Next, Kip gets it playing everywhere and reads the killfeed. 4Ks, aces and headshots get
-            tagged on their own, usually within a minute or two.
-          </p>
-        </div>
+        {!found && (
+          <div className="squircle flex items-center gap-3.5 rounded-[22px] bg-white/4 py-3.5 pr-4.5 pl-2.5">
+            <Kip className="h-14 w-14 shrink-0" />
+            <p className="text-sm leading-relaxed text-soft">
+              Next, Kip gets it playing everywhere and reads the killfeed. 4Ks, aces and headshots
+              get tagged on their own, usually within a minute or two.
+            </p>
+          </div>
+        )}
       </div>
 
-      <form
-        onSubmit={save}
-        className="glass squircle flex flex-col gap-5.5 rounded-[30px] px-5 pt-6 pb-5 sm:px-7"
-      >
-        <label className="flex flex-col gap-2">
-          <span className="text-[13px] font-semibold text-soft">Title</span>
-          <input
-            required
-            maxLength={100}
-            value={title}
-            onChange={(e) => {
-              setTitle(e.target.value);
-              setSaved(false);
-            }}
-            className="squircle h-12 rounded-[14px] bg-white/6 px-4 text-[17px] font-semibold ring-1 ring-white/10 ring-inset focus:ring-accent focus:outline-none"
-          />
-        </label>
-        <fieldset className="flex flex-col gap-2">
-          <legend className="mb-2 text-[13px] font-semibold text-soft">
-            Map <span className="font-medium text-muted">· optional</span>
-          </legend>
-          <div className="flex flex-wrap gap-1.5">
-            {CS2_MAPS.map((m) => (
-              <Chip
-                key={m}
-                pressed={map === m}
-                onClick={() => {
-                  setMap(map === m ? "" : m);
-                  setSaved(false);
-                }}
-              >
-                {m}
-              </Chip>
-            ))}
-          </div>
-        </fieldset>
-        {friends.length > 0 && (
+      {phase.kind === "duplicate" ? (
+        <HereAlready clip={phase.clip} />
+      ) : phase.kind === "inTrash" ? (
+        <InYourTrash clip={phase.clip} onUploadAnyway={() => start(false)} />
+      ) : (
+        <form
+          onSubmit={save}
+          className="glass squircle flex flex-col gap-5.5 rounded-[30px] px-5 pt-6 pb-5 sm:px-7"
+        >
+          <label className="flex flex-col gap-2">
+            <span className="text-[13px] font-semibold text-soft">Title</span>
+            <input
+              required
+              maxLength={100}
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                setSaved(false);
+              }}
+              className="squircle h-12 rounded-[14px] bg-white/6 px-4 text-[17px] font-semibold ring-1 ring-white/10 ring-inset focus:ring-accent focus:outline-none"
+            />
+          </label>
           <fieldset className="flex flex-col gap-2">
-            <legend className="mb-2 text-[13px] font-semibold text-soft">Who's in it</legend>
+            <legend className="mb-2 text-[13px] font-semibold text-soft">
+              Map <span className="font-medium text-muted">· optional</span>
+            </legend>
             <div className="flex flex-wrap gap-1.5">
-              {friends.map((m) => {
-                const on = players.has(m.id);
-                return (
-                  <button
-                    key={m.id}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => {
-                      togglePlayer(m.id);
-                      setSaved(false);
-                    }}
-                    className={`flex h-9 items-center gap-1.5 rounded-full pr-3.5 pl-1 text-sm font-semibold ${
-                      on
-                        ? "bg-white/14 text-text shadow-[inset_0_0_0_1.5px_var(--color-text)]"
-                        : "bg-white/6 text-soft hover:bg-white/10"
-                    }`}
-                  >
-                    <Avatar name={m.displayName} url={m.avatarUrl} size={28} />
-                    <bdi>{m.displayName}</bdi>
-                  </button>
-                );
-              })}
+              {CS2_MAPS.map((m) => (
+                <Chip
+                  key={m}
+                  pressed={map === m}
+                  onClick={() => {
+                    setMap(map === m ? "" : m);
+                    setSaved(false);
+                  }}
+                >
+                  {m}
+                </Chip>
+              ))}
             </div>
           </fieldset>
-        )}
-        <div className="flex flex-col gap-2 border-t border-white/7 pt-3">
-          {me?.shows && (
-            <Switch
-              checked={hold}
-              onChange={(v) => {
-                holdTouched.current = true;
-                setHold(v);
-              }}
-              label="Save it for the show"
-              hint={
-                hold
-                  ? "Joins tonight's lineup. Nobody sees it until it plays."
-                  : "Post now: everyone sees it as soon as it's ready."
-              }
-            />
+          {friends.length > 0 && (
+            <fieldset className="flex flex-col gap-2">
+              <legend className="mb-2 text-[13px] font-semibold text-soft">Who's in it</legend>
+              <div className="flex flex-wrap gap-1.5">
+                {friends.map((m) => {
+                  const on = players.has(m.id);
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => {
+                        togglePlayer(m.id);
+                        setSaved(false);
+                      }}
+                      className={`flex h-9 items-center gap-1.5 rounded-full pr-3.5 pl-1 text-sm font-semibold ${
+                        on
+                          ? "bg-white/14 text-text shadow-[inset_0_0_0_1.5px_var(--color-text)]"
+                          : "bg-white/6 text-soft hover:bg-white/10"
+                      }`}
+                    >
+                      <Avatar name={m.displayName} url={m.avatarUrl} size={28} />
+                      <bdi>{m.displayName}</bdi>
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
           )}
-          <Switch
-            checked={myPov}
-            onChange={(v) => {
-              setMyPov(v);
-              setSaved(false);
-            }}
-            label="Recorded from my point of view"
-            hint="Kip only counts kills as yours when it's your screen."
-          />
-        </div>
-        {saveError && (
-          <p role="alert" className="text-sm text-danger">
-            {saveError}
-          </p>
-        )}
-        <div className="flex flex-wrap items-center gap-3 pt-1">
-          <span className="text-[13px] text-muted">
-            Description, tags and the rest can be added later from the clip page.
-          </span>
-          <Button
-            type="submit"
-            variant="primary"
-            size="lg"
-            className="ml-auto"
-            disabled={!clipId || saving || phase.kind === "error"}
-          >
-            {saved && uploading ? "Saved ✓" : "Save details"}
-          </Button>
-        </div>
-      </form>
+          <div className="flex flex-col gap-2 border-t border-white/7 pt-3">
+            {me?.shows && (
+              <Switch
+                checked={hold}
+                onChange={(v) => {
+                  holdTouched.current = true;
+                  setHold(v);
+                }}
+                label="Save it for the show"
+                hint={
+                  hold
+                    ? "Joins tonight's lineup. Nobody sees it until it plays."
+                    : "Post now: everyone sees it as soon as it's ready."
+                }
+              />
+            )}
+            <Switch
+              checked={myPov}
+              onChange={(v) => {
+                setMyPov(v);
+                setSaved(false);
+              }}
+              label="Recorded from my point of view"
+              hint="Kip only counts kills as yours when it's your screen."
+            />
+          </div>
+          {saveError && (
+            <p role="alert" className="text-sm text-danger">
+              {saveError}
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <span className="text-[13px] text-muted">
+              Description, tags and the rest can be added later from the clip page.
+            </span>
+            <Button
+              type="submit"
+              variant="primary"
+              size="lg"
+              className="ml-auto"
+              disabled={!clipId || saving || phase.kind === "error"}
+            >
+              {saved && uploading ? "Saved ✓" : "Save details"}
+            </Button>
+          </div>
+        </form>
+      )}
 
       <Modal
         open={blocker.status === "blocked"}
@@ -684,10 +749,82 @@ function Uploading({
   );
 }
 
+/** Where the clip with the same file is, or why it can't be opened. */
+function copyOf(clip: Clip | null): string {
+  if (!clip) return "Someone uploaded this exact file already. It shows up once it's ready.";
+  const who = clip.isMine ? "You" : clip.uploader.displayName;
+  return clip.teaser
+    ? `${who} uploaded this exact file already. It's saved for the show.`
+    : `${who} uploaded this exact file already, as “${clip.title}”.`;
+}
+
+/** One upload's file is here already: what to open instead. */
+function HereAlready({ clip }: { clip: Clip | null }) {
+  return (
+    <div className="glass squircle flex flex-col items-start gap-4 rounded-[30px] px-5 pt-6 pb-5 sm:px-7">
+      <Kip pose="king" className="h-24 w-24" />
+      <h2 className="text-[28px] leading-tight font-extrabold">It's here already.</h2>
+      <p dir="auto" className="text-[17px] text-soft">
+        {copyOf(clip)} One copy is plenty, so this one wasn't uploaded.
+      </p>
+      {clip && !clip.teaser && (
+        <Link
+          to="/clips/$clipId"
+          params={{ clipId: clip.id }}
+          className={buttonClass("primary", "lg")}
+        >
+          Open it
+        </Link>
+      )}
+    </div>
+  );
+}
+
+/** One upload's file is a clip of yours in the trash: restore it, or upload it as new. */
+function InYourTrash({ clip, onUploadAnyway }: { clip: Clip; onUploadAnyway: () => void }) {
+  const navigate = useNavigate();
+  const restore = useRestoreClip(clip.id);
+  return (
+    <div className="glass squircle flex flex-col items-start gap-4 rounded-[30px] px-5 pt-6 pb-5 sm:px-7">
+      <Kip pose="asleep" className="h-24 w-24" />
+      <h2 className="text-[28px] leading-tight font-extrabold">It's in your trash.</h2>
+      <p dir="auto" className="text-[17px] text-soft">
+        You deleted this exact file, “{clip.title}”,{" "}
+        {clip.deletedAt ? timeAgo(clip.deletedAt) : "recently"}. Restore it with its reactions and
+        tags, or upload it again as a new clip.
+      </p>
+      {restore.error && (
+        <p role="alert" className="text-sm text-danger">
+          Couldn't restore it: {restore.error.message}
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="primary"
+          size="lg"
+          disabled={restore.isPending}
+          onClick={() =>
+            restore.mutate(undefined, {
+              onSuccess: () => navigate({ to: "/clips/$clipId", params: { clipId: clip.id } }),
+            })
+          }
+        >
+          Restore it
+        </Button>
+        <Button size="lg" onClick={onUploadAnyway} disabled={restore.isPending}>
+          Upload it as new
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 type Item = {
   key: number;
   file: File;
   state: Phase | { kind: "waiting" } | ({ kind: "rejected" } & Rejection);
+  /** Upload it without asking whether it's here (it's in your trash; you said upload). */
+  skipCheck?: boolean;
   clipId?: string;
   serverHold?: boolean;
   holdSending?: boolean;
@@ -696,6 +833,7 @@ type Item = {
 
 const isActive = (item: Item) =>
   item.state.kind === "waiting" ||
+  item.state.kind === "checking" ||
   item.state.kind === "starting" ||
   item.state.kind === "uploading" ||
   item.state.kind === "finishing";
@@ -715,6 +853,7 @@ function Batch({
   const queryClient = useQueryClient();
   const { data: me } = useMe();
   const toast = useToast();
+  const findCopy = useFindCopy();
   const items = useRef<Item[]>([]);
   const [, rerender] = useReducer((n: number) => n + 1, 0);
   const nextKey = useRef(0);
@@ -773,9 +912,25 @@ function Batch({
     const { file } = item;
     const controller = new AbortController();
     const { signal } = controller;
-    update(item, { state: { kind: "starting" }, abort: controller });
     let id: string | null = null;
     try {
+      if (!item.skipCheck) {
+        update(item, { state: { kind: "checking", hashed: null }, abort: controller });
+        const copy = await findCopy(
+          file,
+          (hashed) => update(item, { state: { kind: "checking", hashed } }),
+          signal,
+        );
+        if (copy.result === "duplicate") {
+          update(item, { state: { kind: "duplicate", clip: copy.clip ?? null } });
+          return;
+        }
+        if (copy.result === "inTrash" && copy.clip) {
+          update(item, { state: { kind: "inTrash", clip: copy.clip } });
+          return;
+        }
+      }
+      update(item, { state: { kind: "starting" }, abort: controller });
       const created = await call(
         api.POST("/api/clips", {
           body: {
@@ -820,6 +975,20 @@ function Batch({
     }
   };
 
+  /** Brings back the clip in your trash that has `item`'s file, instead of uploading it. */
+  const restore = async (item: Item, clip: Clip) => {
+    try {
+      const restored = await call(
+        api.POST("/api/clips/{id}/restore", { params: { path: { id: clip.id } } }),
+      );
+      update(item, { state: { kind: "restored", clip: restored }, clipId: restored.id });
+      void queryClient.invalidateQueries({ queryKey: ["clips"] });
+      void queryClient.invalidateQueries({ queryKey: ["trash"] });
+    } catch (err) {
+      toast(`Couldn't restore ${clip.title}: ${errorText(err)}`, "danger");
+    }
+  };
+
   /** Uploads what's waiting, in order, until nothing is; what's added meanwhile joins in. */
   const run = async () => {
     if (running.current) return;
@@ -835,6 +1004,14 @@ function Batch({
     }
     if (left.current) {
       const up = items.current.filter((i) => i.state.kind === "done").length;
+      const copies = items.current.filter(
+        (i) => i.state.kind === "duplicate" || i.state.kind === "inTrash",
+      ).length;
+      if (copies > 0) {
+        toast(
+          `${copies === 1 ? "1 file was" : `${copies} files were`} here already, so ${copies === 1 ? "it wasn't" : "they weren't"} uploaded.`,
+        );
+      }
       if (up > 0)
         toast(`${up === 1 ? "1 clip is" : `${up} clips are`} up. Kip's getting them ready.`);
     }
@@ -883,8 +1060,11 @@ function Batch({
     return () => window.removeEventListener("beforeunload", warn);
   }, [active]);
 
-  const valid = items.current.filter((i) => i.state.kind !== "rejected");
-  const up = valid.filter((i) => i.state.kind === "done").length;
+  // Files that are here already aren't counted: there's nothing of theirs to upload.
+  const valid = items.current.filter(
+    (i) => i.state.kind !== "rejected" && i.state.kind !== "duplicate",
+  );
+  const up = valid.filter((i) => i.state.kind === "done" || i.state.kind === "restored").length;
 
   return (
     <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -903,6 +1083,11 @@ function Batch({
                 void run();
               }}
               onRemove={() => remove(item)}
+              onRestore={(clip) => restore(item, clip)}
+              onUploadAnyway={() => {
+                update(item, { state: { kind: "waiting" }, skipCheck: true });
+                void run();
+              }}
             />
           ))}
         </ul>
@@ -979,12 +1164,17 @@ function BatchRow({
   onCancel,
   onRetry,
   onRemove,
+  onRestore,
+  onUploadAnyway,
 }: {
   item: Item;
   onCancel: () => void;
   onRetry: () => void;
   onRemove: () => void;
+  onRestore: (clip: Clip) => Promise<void>;
+  onUploadAnyway: () => void;
 }) {
+  const [restoring, setRestoring] = useState(false);
   const { file, state } = item;
   // Its first frame, from the file itself.
   const playable = state.kind !== "rejected";
@@ -997,7 +1187,47 @@ function BatchRow({
   }, [file, playable]);
 
   let action: ReactNode;
-  if (state.kind === "waiting" || state.kind === "rejected") {
+  const openable =
+    (state.kind === "duplicate" || state.kind === "restored") && state.clip && !state.clip.teaser
+      ? state.clip
+      : null;
+  if (openable) {
+    action = (
+      <Link
+        to="/clips/$clipId"
+        params={{ clipId: openable.id }}
+        className={buttonClass("secondary", "sm")}
+        aria-label={`Open the clip ${file.name} is`}
+      >
+        Open
+      </Link>
+    );
+  } else if (state.kind === "inTrash") {
+    action = (
+      <div className="flex shrink-0 gap-1.5">
+        <Button
+          size="sm"
+          disabled={restoring}
+          onClick={() => {
+            setRestoring(true);
+            void onRestore(state.clip).finally(() => setRestoring(false));
+          }}
+          aria-label={`Restore ${file.name} from your trash`}
+        >
+          Restore
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={restoring}
+          onClick={onUploadAnyway}
+          aria-label={`Upload ${file.name} as new`}
+        >
+          Upload as new
+        </Button>
+      </div>
+    );
+  } else if (state.kind === "waiting" || state.kind === "rejected" || state.kind === "duplicate") {
     action = (
       <Button size="sm" variant="ghost" onClick={onRemove} aria-label={`Remove ${file.name}`}>
         Remove
@@ -1087,12 +1317,34 @@ function UploadState({
       </p>
     );
   }
+  if (phase.kind === "duplicate" || phase.kind === "inTrash" || phase.kind === "restored") {
+    const says =
+      phase.kind === "duplicate"
+        ? `Not uploaded: it's here already. ${copyOf(phase.clip)}`
+        : phase.kind === "inTrash"
+          ? `Not uploaded: it's in your trash, as “${phase.clip.title}”.`
+          : `Restored ✓ · “${phase.clip.title}” is back from your trash.`;
+    return (
+      <p dir="auto" className="text-sm text-soft">
+        {says}
+      </p>
+    );
+  }
   const loaded =
-    phase.kind === "uploading" ? phase.progress.loaded : phase.kind === "starting" ? 0 : total;
+    phase.kind === "uploading"
+      ? phase.progress.loaded
+      : phase.kind === "starting" || phase.kind === "checking"
+        ? 0
+        : total;
   const pct = total ? (loaded / total) * 100 : 0;
   let line: string;
   let left = "";
-  if (phase.kind === "starting") line = "Starting…";
+  if (phase.kind === "checking") {
+    line =
+      phase.hashed == null
+        ? "Checking it isn't here already…"
+        : `Comparing it with a clip that looks the same… ${Math.floor(phase.hashed * 100)}%`;
+  } else if (phase.kind === "starting") line = "Starting…";
   else if (phase.kind === "finishing") line = "Finishing…";
   else if (phase.kind === "done") line = `Uploaded ✓ · ${formatBytes(total)}`;
   else {

@@ -88,6 +88,52 @@
         ]
       }
     },
+    "/api/admin/duplicates": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Clips that are the same file, uploaded before duplicates were refused (decision 55),\nfor an admin to delete the extra copies (`DELETE /api/clips/{id}`).",
+        "operationId": "list_duplicates",
+        "responses": {
+          "200": {
+            "description": "Clips that are copies of each other",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Copies"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/api/admin/invites": {
       "get": {
         "tags": [
@@ -567,6 +613,62 @@
           },
           "400": {
             "description": "Invalid title, file type or size",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/clips/check": {
+      "post": {
+        "tags": [
+          "clips"
+        ],
+        "summary": "Is this file here already? Ask before uploading, with its size and samples (they take\nmilliseconds to hash), and with the hash of all of it only when the answer is `verify`.\nA file that's here already as a clip that's processing or ready is a duplicate, whoever\nuploaded it; one of your own in the trash can be restored instead; one past its week in\nthe trash, or someone else's in it, is new (decision 55).",
+        "operationId": "check_upload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What's here of it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadCheck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad size or hash",
             "content": {
               "application/json": {
                 "schema": {
@@ -1312,7 +1414,7 @@
             }
           },
           "409": {
-            "description": "In the trash for over 7 days: being deleted",
+            "description": "In the trash for over 7 days: being deleted; or its file was uploaded again since",
             "content": {
               "application/json": {
                 "schema": {
@@ -3126,6 +3228,33 @@
         },
         "additionalProperties": false
       },
+      "CheckUpload": {
+        "type": "object",
+        "description": "A file about to be uploaded, by its fingerprint (`core::dedup`).",
+        "required": [
+          "bytes",
+          "sampleHash"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "File size."
+          },
+          "contentHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 (hex) of the SHA-256 of each 8 MiB block of the file, in order. Only once\nthe answer to the samples was `verify`."
+          },
+          "sampleHash": {
+            "type": "string",
+            "description": "SHA-256 (hex) of three 1 MiB samples of the file: its first MiB, the MiB starting at\n`floor((bytes - 1 MiB) / 2)` and its last MiB; of the whole file when it's 3 MiB or\nless."
+          }
+        },
+        "additionalProperties": false
+      },
       "ClipAnalysis": {
         "type": "object",
         "required": [
@@ -3241,6 +3370,14 @@
           "description": {
             "type": "string"
           },
+          "duplicateOf": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The clip with the same file, when it failed as a duplicate: only to its uploader,\nand only when they may open that clip."
+          },
           "durationMs": {
             "type": [
               "integer",
@@ -3268,6 +3405,7 @@
                   "tooLong",
                   "notAVideo",
                   "unreadable",
+                  "duplicate",
                   "server"
                 ]
               },
@@ -3407,6 +3545,30 @@
               "null"
             ],
             "format": "int32"
+          }
+        }
+      },
+      "Copies": {
+        "type": "object",
+        "required": [
+          "groups",
+          "unchecked"
+        ],
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ClipView"
+              }
+            },
+            "description": "Clips that are the same file, each group oldest first; the newest groups first.\nOnly clips that are processing or ready and not in the trash."
+          },
+          "unchecked": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Clips whose file hasn't been fingerprinted yet (those from before duplicate\ndetection, until their `fingerprint` job runs): their copies aren't listed yet."
           }
         }
       },
@@ -4534,6 +4696,37 @@
           }
         },
         "additionalProperties": false
+      },
+      "UploadCheck": {
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "clip": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ClipView",
+                "description": "The clip with the file: for `inTrash`, and for `duplicate` when you may open it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "$ref": "#/components/schemas/UploadVerdict"
+          }
+        }
+      },
+      "UploadVerdict": {
+        "type": "string",
+        "enum": [
+          "new",
+          "verify",
+          "duplicate",
+          "inTrash"
+        ]
       },
       "Uploader": {
         "type": "object",

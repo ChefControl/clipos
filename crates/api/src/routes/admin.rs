@@ -4,6 +4,7 @@ use axum::{extract::State, http::StatusCode};
 use clipos_core::{
     analysis,
     clips::{self, ClipStatus},
+    dedup,
     invites::{self, Invite},
     jobs,
     users::{self, Role, User, UserStatus},
@@ -17,6 +18,7 @@ use crate::{
     AppState, ErrorBody,
     error::ApiError,
     extract::{Admin, Json, Path},
+    routes::clips::{ClipView, views},
 };
 
 /// Every invite, active first, newest first.
@@ -226,4 +228,49 @@ pub async fn analyse_clip(
         tracing::info!(admin = %admin.handle, clip_id = %id, "re-analysis queued");
     }
     Ok((StatusCode::ACCEPTED, Json(AnalysisQueued { pending: true })))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Copies {
+    /// Clips that are the same file, each group oldest first; the newest groups first.
+    /// Only clips that are processing or ready and not in the trash.
+    pub groups: Vec<Vec<ClipView>>,
+    /// Clips whose file hasn't been fingerprinted yet (those from before duplicate
+    /// detection, until their `fingerprint` job runs): their copies aren't listed yet.
+    pub unchecked: i64,
+}
+
+/// Clips that are the same file, uploaded before duplicates were refused (decision 55),
+/// for an admin to delete the extra copies (`DELETE /api/clips/{id}`).
+#[utoipa::path(
+    get,
+    path = "/admin/duplicates",
+    tag = "admin",
+    security(("bearer" = [])),
+    responses(
+        (status = 200, description = "Clips that are copies of each other", body = Copies),
+        (status = 403, description = "Not an admin", body = ErrorBody),
+    )
+)]
+pub async fn list_duplicates(
+    State(state): State<AppState>,
+    Admin(admin): Admin,
+) -> Result<Json<Copies>, ApiError> {
+    let mut groups = Vec::new();
+    for ids in dedup::copies(&state.pool).await? {
+        let found = clips::get_many(&state.pool, &ids).await?;
+        // `get_many` keeps no order: put them back oldest first.
+        let mut ordered = Vec::with_capacity(ids.len());
+        for id in &ids {
+            if let Some(clip) = found.iter().find(|c| c.id == *id) {
+                ordered.push(clip.clone());
+            }
+        }
+        groups.push(views(&state, ordered, &admin, false).await?);
+    }
+    Ok(Json(Copies {
+        groups,
+        unchecked: dedup::unchecked(&state.pool).await?,
+    }))
 }

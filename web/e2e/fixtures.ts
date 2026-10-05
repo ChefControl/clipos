@@ -360,6 +360,10 @@ export async function mockApi(page: Page, { meError }: { meError?: string } = {}
         201,
       );
     }
+    // Nothing uploaded is here already, unless a test says otherwise.
+    if (method === "POST" && path === "/api/clips/check") {
+      return json(route, { result: "new", clip: null });
+    }
     if (method === "POST" && path.endsWith("/complete")) return json(route, clips.processing);
     if (/^\/api\/clips\/[^/]+\/download$/.test(path)) return json(route, { url: VIDEO });
     const hold = path.match(/^\/api\/clips\/([^/]+)\/(hold|release)$/);
@@ -440,6 +444,7 @@ export async function mockApi(page: Page, { meError }: { meError?: string } = {}
     if (method === "POST" && /^\/api\/admin\/clips\/[^/]+\/analyse$/.test(path)) {
       return json(route, { pending: true }, 202);
     }
+    if (path === "/api/admin/duplicates") return json(route, { groups: [], unchecked: 0 });
     if (path === "/api/admin/invites") {
       return json(route, [
         {

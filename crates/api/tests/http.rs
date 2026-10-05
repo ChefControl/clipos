@@ -1008,6 +1008,7 @@ async fn ready_clip(pool: &PgPool, owner_sub: &str, owner_email: &str, title: &s
             height: 1080,
             fps: 60.0,
             metadata: json!({}),
+            playback_fingerprint: clipos_core::testing::fingerprint(clip.id),
         },
     )
     .await
@@ -1109,6 +1110,237 @@ async fn edit_react_delete_restore(pool: PgPool) {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _) = get(&app, &path, Some(&kim)).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// What the worker does with a new upload's original before transcoding it: keeps its
+/// fingerprint, or finds the clip that has the same file.
+async fn claim_original(
+    pool: &PgPool,
+    clip: &str,
+    fp: &clipos_core::dedup::Fingerprint,
+) -> Option<uuid::Uuid> {
+    clipos_core::dedup::claim_original(pool, clip.parse().unwrap(), fp)
+        .await
+        .unwrap()
+}
+
+/// Asking whether a file is here before uploading it (decision 55): by its samples, then by
+/// all of it; a copy of anyone's clip is a duplicate, one of your own in the trash can be
+/// restored, and what the worker refused says which clip it copies.
+#[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
+async fn duplicate_uploads(pool: PgPool) {
+    use clipos_core::{clips, dedup};
+    invite(&pool, "sam@gmail.com").await;
+    invite(&pool, "kim@gmail.com").await;
+    let ace = ready_clip(&pool, "google-oauth2|sam", "sam@gmail.com", "Ace").await;
+    let file = dedup::Fingerprint {
+        bytes: 123_456,
+        sample_hash: [1; 32],
+        content_hash: [2; 32],
+    };
+    dedup::record(&pool, ace.parse().unwrap(), dedup::File::Original, &file)
+        .await
+        .unwrap();
+    let app = app(pool.clone()).await;
+    let sam = user_token("google-oauth2|sam", "sam@gmail.com");
+    let kim = user_token("google-oauth2|kim", "kim@gmail.com");
+    let check = |token: &str, body: Value| {
+        let (app, token) = (&app, token.to_owned());
+        async move {
+            let (status, body) = send(
+                app,
+                "POST",
+                "/api/clips/check",
+                Some(&token),
+                Some(body),
+                &[],
+            )
+            .await;
+            (
+                status,
+                if status == StatusCode::OK {
+                    json(&body)
+                } else {
+                    json!(body)
+                },
+            )
+        }
+    };
+    let sample = dedup::to_hex(&file.sample_hash);
+    let content = dedup::to_hex(&file.content_hash);
+
+    // Same size and samples: maybe. Then all of it decides.
+    let (status, found) = check(&kim, json!({ "bytes": 123_456, "sampleHash": sample })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(found, json!({ "result": "verify", "clip": null }));
+    let (_, found) = check(
+        &kim,
+        json!({ "bytes": 123_456, "sampleHash": sample, "contentHash": content.to_uppercase() }),
+    )
+    .await;
+    assert_eq!(found["result"], "duplicate");
+    assert_eq!(found["clip"]["id"], ace.as_str());
+    assert_eq!(found["clip"]["title"], "Ace");
+    let other = dedup::to_hex(&[3; 32]);
+    let (_, found) = check(
+        &kim,
+        json!({ "bytes": 123_456, "sampleHash": sample, "contentHash": other }),
+    )
+    .await;
+    assert_eq!(found["result"], "new");
+    let (_, found) = check(&kim, json!({ "bytes": 123_457, "sampleHash": sample })).await;
+    assert_eq!(found["result"], "new");
+
+    // What isn't a size or a hash.
+    for bad in [
+        json!({ "bytes": 0, "sampleHash": sample }),
+        json!({ "bytes": clips::MAX_BYTES + 1, "sampleHash": sample }),
+        json!({ "bytes": 10, "sampleHash": "abc" }),
+        json!({ "bytes": 10, "sampleHash": sample, "contentHash": "zz" }),
+    ] {
+        let (status, _) = check(&kim, bad.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let (status, _) = check(&kim, json!({ "bytes": 10, "sampleHash": sample, "x": 1 })).await;
+    assert!(status.is_client_error());
+    let (status, _) = send(&app, "POST", "/api/clips/check", None, Some(json!({})), &[]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // In the trash: its uploader is offered it back; to anyone else it's new.
+    let path = format!("/api/clips/{ace}");
+    let (status, _) = send(&app, "DELETE", &path, Some(&sam), None, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let whole = json!({ "bytes": 123_456, "sampleHash": sample, "contentHash": content });
+    let (_, found) = check(&sam, whole.clone()).await;
+    assert_eq!(found["result"], "inTrash");
+    assert_eq!(found["clip"]["id"], ace.as_str());
+    assert!(found["clip"]["deletedAt"].is_string());
+    let (_, found) = check(&kim, whole.clone()).await;
+    assert_eq!(found["result"], "new");
+
+    // Kim uploads it, so it's here again: Sam's can't come back.
+    let again = ready_clip(&pool, "google-oauth2|kim", "kim@gmail.com", "Kim's ace").await;
+    assert_eq!(claim_original(&pool, &again, &file).await, None);
+    let (status, body) = send(
+        &app,
+        "POST",
+        &format!("{path}/restore"),
+        Some(&sam),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        json(&body)["message"]
+            .as_str()
+            .unwrap()
+            .contains("uploaded again")
+    );
+    let (_, found) = check(&sam, whole.clone()).await;
+    assert_eq!(found["result"], "duplicate");
+    assert_eq!(found["clip"]["id"], again.as_str());
+
+    // Sam uploads it anyway: the worker refuses it, and says which clip has it.
+    let refused = ready_clip(&pool, "google-oauth2|sam", "sam@gmail.com", "Copy").await;
+    sqlx::query("UPDATE clips SET status = 'processing' WHERE id = $1::uuid")
+        .bind(&refused)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        claim_original(&pool, &refused, &file).await,
+        Some(again.parse().unwrap())
+    );
+    clips::set_failed(&pool, refused.parse().unwrap(), clips::DUPLICATE_ERROR)
+        .await
+        .unwrap();
+    let (_, body) = get(&app, &format!("/api/clips/{refused}"), Some(&sam)).await;
+    let view = json(&body);
+    assert_eq!(view["failureReason"], "duplicate");
+    assert_eq!(view["duplicateOf"], again.as_str());
+
+    // Unless that clip is one Sam can't open (still processing), nor can Sam see it in
+    // the answer to a check.
+    sqlx::query("UPDATE clips SET status = 'processing' WHERE id = $1::uuid")
+        .bind(&again)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_, body) = get(&app, &format!("/api/clips/{refused}"), Some(&sam)).await;
+    assert_eq!(json(&body)["duplicateOf"], Value::Null);
+    let (_, found) = check(&sam, whole).await;
+    assert_eq!(found, json!({ "result": "duplicate", "clip": null }));
+}
+
+/// Copies uploaded before duplicates were refused are listed for admins, who delete the
+/// extra ones as they'd delete any clip.
+#[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
+async fn admins_see_copies_already_here(pool: PgPool) {
+    use clipos_core::dedup;
+    invite(&pool, "sam@gmail.com").await;
+    invite(&pool, "kim@gmail.com").await;
+    let admin = admin_token(&pool).await;
+    let first = ready_clip(&pool, "google-oauth2|sam", "sam@gmail.com", "First").await;
+    let second = ready_clip(&pool, "google-oauth2|kim", "kim@gmail.com", "Second").await;
+    let other = ready_clip(&pool, "google-oauth2|kim", "kim@gmail.com", "Other").await;
+    let app = app(pool.clone()).await;
+    let kim = user_token("google-oauth2|kim", "kim@gmail.com");
+
+    let (status, _) = get(&app, "/api/admin/duplicates", Some(&kim)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, body) = get(&app, "/api/admin/duplicates", Some(&admin)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(json(&body), json!({ "groups": [], "unchecked": 3 }));
+
+    // As the `fingerprint` job records them: two are the same file.
+    let file = |n: u8| dedup::Fingerprint {
+        bytes: 1000,
+        sample_hash: [n; 32],
+        content_hash: [n; 32],
+    };
+    for (clip, n) in [(&first, 1), (&second, 1), (&other, 2)] {
+        dedup::record(
+            &pool,
+            clip.parse().unwrap(),
+            dedup::File::Original,
+            &file(n),
+        )
+        .await
+        .unwrap();
+    }
+    let (_, body) = get(&app, "/api/admin/duplicates", Some(&admin)).await;
+    let listed = json(&body);
+    assert_eq!(listed["unchecked"], 0);
+    let groups = listed["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    let ids: Vec<&str> = groups[0]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [first.as_str(), second.as_str()], "oldest first");
+    assert_eq!(groups[0][1]["uploader"]["handle"], "kim");
+    assert_eq!(groups[0][1]["canEdit"], true);
+
+    // The admin deletes the second copy: it's gone from the list, and Kim can't bring it
+    // back while the first is here.
+    let path = format!("/api/clips/{second}");
+    let (status, _) = send(&app, "DELETE", &path, Some(&admin), None, &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, body) = get(&app, "/api/admin/duplicates", Some(&admin)).await;
+    assert_eq!(json(&body)["groups"], json!([]));
+    let (status, _) = send(
+        &app,
+        "POST",
+        &format!("{path}/restore"),
+        Some(&kim),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }
 
 /// Does what the worker's `analyse` job does with the clip's queued job: claims it, stores
@@ -4787,7 +5019,10 @@ async fn a_trashed_clip_doesnt_load_or_play(pool: PgPool) {
     assert!(is_held(&pool, &a).await);
 
     // Trashed after its load: play refuses it and it comes off.
-    assert!(clips::restore(&pool, a.parse().unwrap()).await.unwrap());
+    assert_eq!(
+        clips::restore(&pool, a.parse().unwrap()).await.unwrap(),
+        clips::Restore::Restored
+    );
     ws_send(&mut host, json!({ "type": "load", "clipId": a })).await;
     ws_next(&mut friend, "state").await;
     assert!(clips::soft_delete(&pool, a.parse().unwrap()).await.unwrap());

@@ -13,8 +13,10 @@ use chrono::{DateTime, Utc};
 use clipos_core::{
     analysis,
     clips::{
-        self, Clip, ClipEdit, ClipStatus, Cursor, Filter, NewClip, NewClipError, Sort, VIEW_TTL,
+        self, Clip, ClipEdit, ClipStatus, Cursor, Filter, NewClip, NewClipError, Restore, Sort,
+        VIEW_TTL,
     },
+    dedup::{self, Found},
     shares, shows,
     social::{self, Member, ReactionCount, SocialError},
     storage::{Access, Container, Overrides},
@@ -65,6 +67,9 @@ pub struct ClipView {
     /// The kind of failure, for the uploader's failed screen.
     #[schema(inline)]
     pub failure_reason: Option<clips::FailureReason>,
+    /// The clip with the same file, when it failed as a duplicate: only to its uploader,
+    /// and only when they may open that clip.
+    pub duplicate_of: Option<Uuid>,
     pub uploader: Uploader,
     pub is_mine: bool,
     /// The viewer may edit and delete it (uploader or admin).
@@ -204,7 +209,17 @@ pub(crate) async fn views(
             .filter(|_| can_edit)
             .map(|token| crate::routes::share::share_url(state, &token));
         let tags = tags.remove(&clip.id).unwrap_or_default();
+        let duplicate_of = match clip.duplicate_of {
+            Some(other) if is_mine && clip.status == ClipStatus::Failed => {
+                clips::get_including_deleted(&state.pool, other)
+                    .await?
+                    .filter(|other| !hidden(other, viewer))
+                    .map(|other| other.id)
+            }
+            _ => None,
+        };
         out.push(ClipView {
+            duplicate_of,
             share_url,
             tags: tags.user,
             auto_tags: tags.auto,
@@ -279,6 +294,7 @@ async fn teaser_view(state: &AppState, clip: Clip) -> Result<ClipView, ApiError>
         status: clip.status,
         error: None,
         failure_reason: None,
+        duplicate_of: None,
         uploader: Uploader {
             handle: clip.owner_handle,
             display_name: clip.owner_display_name,
@@ -347,15 +363,19 @@ async fn visible_clip(state: &AppState, id: Uuid, viewer: &User) -> Result<Clip,
     let clip = clips::get_including_deleted(&state.pool, id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let hidden = (clip.deleted_at.is_some() && !can_edit(&clip, viewer))
-        || (clip.status == ClipStatus::Uploading && clip.owner_id != viewer.id)
-        || (clip.status != ClipStatus::Ready && !can_edit(&clip, viewer))
-        // Saved for the show: only the uploader opens it until it's released.
-        || (clip.is_held() && clip.owner_id != viewer.id);
-    if hidden {
+    if hidden(&clip, viewer) {
         return Err(ApiError::NotFound);
     }
     Ok(clip)
+}
+
+/// A clip the viewer may not open (`visible_clip`).
+fn hidden(clip: &Clip, viewer: &User) -> bool {
+    (clip.deleted_at.is_some() && !can_edit(clip, viewer))
+        || (clip.status == ClipStatus::Uploading && clip.owner_id != viewer.id)
+        || (clip.status != ClipStatus::Ready && !can_edit(clip, viewer))
+        // Saved for the show: only the uploader opens it until it's released.
+        || (clip.is_held() && clip.owner_id != viewer.id)
 }
 
 /// A clip the viewer may change (uploader or admin).
@@ -512,6 +532,91 @@ pub async fn create_clip(
             upload_url: upload_url.to_string(),
         }),
     ))
+}
+
+/// A file about to be uploaded, by its fingerprint (`core::dedup`).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CheckUpload {
+    /// File size.
+    pub bytes: i64,
+    /// SHA-256 (hex) of three 1 MiB samples of the file: its first MiB, the MiB starting at
+    /// `floor((bytes - 1 MiB) / 2)` and its last MiB; of the whole file when it's 3 MiB or
+    /// less.
+    pub sample_hash: String,
+    /// SHA-256 (hex) of the SHA-256 of each 8 MiB block of the file, in order. Only once
+    /// the answer to the samples was `verify`.
+    pub content_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum UploadVerdict {
+    /// Not here: upload it.
+    New,
+    /// A file of the same size has the same samples: ask again with `contentHash`.
+    Verify,
+    /// It's here already.
+    Duplicate,
+    /// It's one of your clips in the trash, which you can restore.
+    InTrash,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadCheck {
+    pub result: UploadVerdict,
+    /// The clip with the file: for `inTrash`, and for `duplicate` when you may open it.
+    pub clip: Option<ClipView>,
+}
+
+/// Is this file here already? Ask before uploading, with its size and samples (they take
+/// milliseconds to hash), and with the hash of all of it only when the answer is `verify`.
+/// A file that's here already as a clip that's processing or ready is a duplicate, whoever
+/// uploaded it; one of your own in the trash can be restored instead; one past its week in
+/// the trash, or someone else's in it, is new (decision 55).
+#[utoipa::path(
+    post,
+    path = "/clips/check",
+    tag = "clips",
+    security(("bearer" = [])),
+    request_body = CheckUpload,
+    responses(
+        (status = 200, description = "What's here of it", body = UploadCheck),
+        (status = 400, description = "Bad size or hash", body = ErrorBody),
+    )
+)]
+pub async fn check_upload(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Json(body): Json<CheckUpload>,
+) -> Result<Json<UploadCheck>, ApiError> {
+    if !(1..=clips::MAX_BYTES).contains(&body.bytes) {
+        return Err(ApiError::BadRequest("clips must be at most 2 GiB".into()));
+    }
+    let hash = |text: &str| {
+        dedup::from_hex(text).ok_or_else(|| ApiError::BadRequest("a hash is 64 hex digits".into()))
+    };
+    let sample = hash(&body.sample_hash)?;
+    let content = body.content_hash.as_deref().map(hash).transpose()?;
+    let found = dedup::check(&state.pool, user.id, body.bytes, &sample, content.as_ref()).await?;
+    let (result, id) = match found {
+        Found::Nothing => (UploadVerdict::New, None),
+        Found::Maybe => (UploadVerdict::Verify, None),
+        Found::Duplicate(id) => (UploadVerdict::Duplicate, Some(id)),
+        Found::InTrash(id) => (UploadVerdict::InTrash, Some(id)),
+    };
+    let clip = match id {
+        Some(id) => clips::get_including_deleted(&state.pool, id)
+            .await?
+            .filter(|clip| !hidden(clip, &user)),
+        None => None,
+    };
+    let clip = match clip {
+        Some(clip) => views(&state, vec![clip], &user, false).await?.pop(),
+        None => None,
+    };
+    Ok(Json(UploadCheck { result, clip }))
 }
 
 async fn own_clip(state: &AppState, id: Uuid, user: &User) -> Result<Clip, ApiError> {
@@ -953,7 +1058,7 @@ pub async fn delete_clip(
         (status = 200, description = "Restored", body = ClipView),
         (status = 400, description = "Not in the trash", body = ErrorBody),
         (status = 403, description = "Not yours", body = ErrorBody),
-        (status = 409, description = "In the trash for over 7 days: being deleted", body = ErrorBody),
+        (status = 409, description = "In the trash for over 7 days: being deleted; or its file was uploaded again since", body = ErrorBody),
     )
 )]
 pub async fn restore_clip(
@@ -962,15 +1067,18 @@ pub async fn restore_clip(
     Path(id): Path<Uuid>,
 ) -> Result<Json<ClipView>, ApiError> {
     let clip = editable_clip(&state, id, &user).await?;
-    if !clips::restore(&state.pool, id).await? {
-        return Err(match clip.deleted_at {
+    match clips::restore(&state.pool, id).await? {
+        Restore::Restored => reload(&state, id, &user).await,
+        Restore::NotRestorable => Err(match clip.deleted_at {
             None => ApiError::BadRequest("the clip isn't in the trash".into()),
             Some(_) => ApiError::Conflict(
                 "the clip was in the trash for over 7 days and is being deleted".into(),
             ),
-        });
+        }),
+        Restore::Duplicate(_) => Err(ApiError::Conflict(
+            "the same file was uploaded again since, so it's here already".into(),
+        )),
     }
-    reload(&state, id, &user).await
 }
 
 #[derive(Debug, Serialize, ToSchema)]

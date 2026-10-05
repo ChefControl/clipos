@@ -881,6 +881,26 @@ for (const [reason, headline] of [
   });
 }
 
+test("a failed upload that's a copy points to the clip that has it", async ({ page }) => {
+  await openClip(page, {
+    ...clips.failed,
+    failureReason: "duplicate",
+    duplicateOf: clips.long.id,
+  });
+  await expect(page.getByRole("heading", { name: "It's here already." })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open that one" })).toHaveAttribute(
+    "href",
+    `/clips/${clips.long.id}`,
+  );
+  await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeVisible();
+
+  // One you can't open: only why.
+  await openClip(page, { ...clips.failed, failureReason: "duplicate", duplicateOf: null });
+  await expect(page.getByRole("heading", { name: "It's here already." })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open that one" })).toHaveCount(0);
+});
+
 test("someone else's failed upload: nothing to retry, only the original", async ({ page }) => {
   await openClip(page, { ...clips.failed, isMine: false, canEdit: false, failureReason: null });
   await expect(page.getByRole("heading", { name: "Something broke on our side." })).toBeVisible();

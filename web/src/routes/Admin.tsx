@@ -1,9 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { type FormEvent, useState } from "react";
 import { call } from "../api/errors";
 import type { components } from "../api/schema";
 import { useApi } from "../auth/ApiProvider";
+import type { Clip } from "../clips/hooks";
 import { Kip } from "../kip/Kip";
+import { shortDate } from "../lib/format";
 import { useTitle } from "../lib/useTitle";
 import { Avatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -38,6 +41,7 @@ export function Admin() {
         <Invites meEmail={me?.email} />
         <Users meId={me?.id} />
       </div>
+      <Duplicates />
     </div>
   );
 }
@@ -270,6 +274,130 @@ function UserRow({
               Disable
             </Button>
           </>
+        )}
+      </div>
+    </li>
+  );
+}
+
+// Copies of one file, from before uploads were checked (decision 55): keep one of each.
+function Duplicates() {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  const copies = useQuery({
+    queryKey: ["admin", "duplicates"],
+    queryFn: () => call(api.GET("/api/admin/duplicates")),
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => call(api.DELETE("/api/clips/{id}", { params: { path: { id } } })),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "duplicates"] });
+      queryClient.invalidateQueries({ queryKey: ["clips"] });
+    },
+  });
+  const groups = copies.data?.groups ?? [];
+  const unchecked = copies.data?.unchecked ?? 0;
+
+  return (
+    <section className="glass squircle flex flex-col gap-3 rounded-[30px] px-5 pt-6 pb-4 sm:px-[26px]">
+      <div className="flex items-center gap-3">
+        <h2 className="text-[26px] font-extrabold">Duplicate clips</h2>
+        {copies.data && groups.length > 0 && (
+          <span className="font-mono text-xs text-muted">
+            {groups.length} {groups.length === 1 ? "file" : "files"}
+          </span>
+        )}
+      </div>
+      <p className="text-[15px] text-soft">
+        The same file uploaded more than once, before Kip checked uploads. Keep one of each and
+        delete the rest: a deleted copy goes to its uploader's trash, and can't be restored while
+        the one you kept is here.
+      </p>
+      {unchecked > 0 && (
+        <p className="text-sm text-muted">
+          Kip is still checking {unchecked === 1 ? "1 older clip" : `${unchecked} older clips`}, so
+          this list may grow.
+        </p>
+      )}
+      <ErrorText error={remove.error ?? copies.error} />
+      {copies.isPending && <p className="py-2 text-muted">Loading…</p>}
+      {copies.data && groups.length === 0 && <p className="py-2 text-muted">No duplicates.</p>}
+      <ul className="flex flex-col gap-3">
+        {groups.map((group) => (
+          <li
+            key={group.map((c) => c.id).join()}
+            aria-label={`Copies of ${group[0]?.title}`}
+            className="squircle flex flex-col rounded-[20px] bg-white/4 px-4 py-1"
+          >
+            <ul className="flex flex-col divide-y divide-white/7">
+              {group.map((clip, i) => (
+                <CopyRow
+                  key={clip.id}
+                  clip={clip}
+                  oldest={i === 0}
+                  busy={remove.isPending}
+                  onDelete={() => {
+                    const by = clip.uploader.displayName;
+                    if (
+                      window.confirm(`Delete “${clip.title}” by ${by}? It goes to their trash.`)
+                    ) {
+                      remove.mutate(clip.id);
+                    }
+                  }}
+                />
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function CopyRow({
+  clip,
+  oldest,
+  busy,
+  onDelete,
+}: {
+  clip: Clip;
+  oldest: boolean;
+  busy: boolean;
+  onDelete: () => void;
+}) {
+  return (
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
+      <Avatar name={clip.uploader.displayName} url={clip.uploader.avatarUrl} size={34} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        {clip.teaser ? (
+          <span dir="auto" className="truncate font-bold">
+            {clip.title}
+          </span>
+        ) : (
+          <Link
+            to="/clips/$clipId"
+            params={{ clipId: clip.id }}
+            dir="auto"
+            className="truncate font-bold hover:underline"
+          >
+            {clip.title}
+          </Link>
+        )}
+        <span className="truncate text-xs text-muted">
+          {clip.uploader.displayName} · {shortDate(clip.createdAt)}
+          {clip.teaser
+            ? " · saved for the show"
+            : ` · ${clip.reactionCount} ${clip.reactionCount === 1 ? "reaction" : "reactions"}`}
+        </span>
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {oldest && <Pill tone="green">First upload</Pill>}
+        {clip.teaser ? (
+          <span className="text-xs text-muted">Can be deleted once it's posted</span>
+        ) : (
+          <Button size="sm" disabled={busy} onClick={onDelete}>
+            Delete
+          </Button>
         )}
       </div>
     </li>
