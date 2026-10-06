@@ -6,9 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use clipos_killfeed::{
-    Analyzer, Detector, IconReader, Owner, Reading, Row, RowFinder, crop_box, summarise,
+    Analyzer, Detector, HudLocator, IconReader, Owner, Reading, Row, crop_box, summarise,
 };
-use image::{Rgb, RgbImage};
+use image::{Rgb, RgbImage, imageops};
 
 fn ort() -> bool {
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
@@ -38,8 +38,9 @@ fn close(a: f32, b: f32) -> bool {
 
 const GRAY: Rgb<u8> = Rgb([128, 128, 128]);
 
-/// The killfeed corner of a 640 x 360 frame.
-const CORNER: (u32, u32) = (270, 180);
+/// The stand-ins' frame size, and its killfeed corner (`crop_box`).
+const FRAME: (u32, u32) = (640, 360);
+const CORNER: (u32, u32, u32, u32) = (370, 0, 270, 180);
 
 fn paint(corner: &mut RgbImage, (x0, y0, x1, y1): (u32, u32, u32, u32), color: [u8; 3]) {
     for x in x0..x1 {
@@ -49,10 +50,10 @@ fn paint(corner: &mut RgbImage, (x0, y0, x1, y1): (u32, u32, u32, u32), color: [
     }
 }
 
-/// A gray corner where the stand-in row finder's first row has the player's red outline
-/// and its second the red fill of their death.
+/// A gray corner where the stand-in locator's first row has the player's red outline and
+/// its second the red fill of their death.
 fn corner_with_my_rows() -> RgbImage {
-    let mut corner = RgbImage::from_pixel(CORNER.0, CORNER.1, GRAY);
+    let mut corner = RgbImage::from_pixel(CORNER.2, CORNER.3, GRAY);
     // First row: 108..270 x 29.7..42.3.
     paint(&mut corner, (108, 30, 270, 32), [220, 20, 30]);
     paint(&mut corner, (108, 40, 270, 42), [220, 20, 30]);
@@ -61,21 +62,33 @@ fn corner_with_my_rows() -> RgbImage {
     corner
 }
 
+/// A gray frame with [`corner_with_my_rows`] in its corner.
+fn frame_with_my_rows() -> RgbImage {
+    let mut frame = RgbImage::from_pixel(FRAME.0, FRAME.1, GRAY);
+    imageops::replace(
+        &mut frame,
+        &corner_with_my_rows(),
+        CORNER.0.into(),
+        CORNER.1.into(),
+    );
+    frame
+}
+
 #[test]
 fn detects_whatever_the_model_answers() {
     if !ort() {
         return;
     }
-    let mut detector = Detector::load(&model("rows/model.onnx"), 1).unwrap();
+    let mut detector = Detector::load(&model("hud/model.onnx"), 1).unwrap();
     let gray = RgbImage::from_pixel(100, 100, GRAY);
     let all = detector.detect(&gray, 0.0).unwrap();
     assert_eq!(all.len(), 6);
-    assert_eq!(all[0].class, 0);
+    // A killfeed row (the locator's class 1), at 478..640 x 30..42 of a 640 x 360 frame.
+    assert_eq!(all[0].class, 1);
     assert!(close(all[0].score, sigmoid(4.0)));
-    assert_eq!(
-        (all[0].cx, all[0].cy, all[0].w, all[0].h),
-        (0.7, 0.2, 0.6, 0.07)
-    );
+    assert!(close(all[0].cx, 559.0 / 640.0) && close(all[0].cy, 0.1));
+    assert!(close(all[0].w, 162.0 / 640.0) && close(all[0].h, 12.0 / 360.0));
+    assert_eq!(all[4].class, 0, "the radar");
     assert!(close(all[5].score, sigmoid(-3.0)));
     // The last box is too unsure.
     assert_eq!(detector.detect(&gray, 0.5).unwrap().len(), 5);
@@ -103,15 +116,28 @@ fn refuses_models_it_cannot_run() {
     std::fs::write(&corrupt, b"not a model").unwrap();
     let error = Detector::load(&corrupt, 1).err().unwrap();
     assert!(format!("{error:#}").contains("loading"), "{error:#}");
-    let error = RowFinder::load(&corrupt, 1).err().unwrap();
-    assert!(format!("{error:#}").contains("loading"), "{error:#}");
-    // The icon reader needs its classes next to the model.
+    // The locator and the icon reader need their classes next to the model.
+    let error = HudLocator::load(&corrupt, 1).err().unwrap();
+    assert!(format!("{error:#}").contains("classes.json"), "{error:#}");
     let error = IconReader::load(&corrupt, 1).err().unwrap();
     assert!(format!("{error:#}").contains("classes.json"), "{error:#}");
     std::fs::write(dir.path().join("classes.json"), b"{}").unwrap();
     assert!(IconReader::load(&corrupt, 1).is_err(), "not a list");
     std::fs::write(dir.path().join("classes.json"), b"[\"ak47\"]").unwrap();
     let error = IconReader::load(&corrupt, 1).err().unwrap();
+    assert!(format!("{error:#}").contains("loading"), "{error:#}");
+    // Not a HUD locator: no killfeed rows among its classes.
+    let error = HudLocator::load(&corrupt, 1).err().unwrap();
+    assert!(
+        format!("{error:#}").contains("has no killfeed_row class"),
+        "{error:#}"
+    );
+    std::fs::write(
+        dir.path().join("classes.json"),
+        b"[\"radar\", \"killfeed_row\"]",
+    )
+    .unwrap();
+    let error = HudLocator::load(&corrupt, 1).err().unwrap();
     assert!(format!("{error:#}").contains("loading"), "{error:#}");
 }
 
@@ -138,11 +164,12 @@ fn finds_rows() {
     if !ort() {
         return;
     }
-    let mut finder = RowFinder::load(&model("rows/model.onnx"), 1).unwrap();
-    // Of the six boxes: two rows. The near-copy, the one ending too far left, the too tall
-    // and the too unsure are dropped.
-    let rows = finder
-        .find(&RgbImage::from_pixel(CORNER.0, CORNER.1, GRAY))
+    let mut locator = HudLocator::load(&model("hud/model.onnx"), 1).unwrap();
+    assert_eq!(crop_box(FRAME.0, FRAME.1), CORNER);
+    // Of the locator's six boxes: two rows in the corner, in its pixels. The near-copy,
+    // the chat's, the radar and the too unsure are dropped.
+    let rows = locator
+        .rows(&RgbImage::from_pixel(FRAME.0, FRAME.1, GRAY), CORNER)
         .unwrap();
     let boxes: Vec<_> = rows
         .iter()
@@ -155,14 +182,9 @@ fn finds_rows() {
     assert!(close(rows[0].score, sigmoid(4.0)));
     assert!(close(rows[1].score, sigmoid(3.0)));
 
-    // A frame that is already a killfeed crop: the tall box is a row too.
-    let rows = finder.find(&RgbImage::from_pixel(600, 100, GRAY)).unwrap();
-    assert_eq!(rows.len(), 3);
-    assert_eq!(rows[2].y0.round(), 50.0);
-
     assert!(
-        finder
-            .find(&RgbImage::new(CORNER.0, CORNER.1))
+        locator
+            .rows(&RgbImage::new(FRAME.0, FRAME.1), CORNER)
             .unwrap()
             .is_empty()
     );
@@ -205,10 +227,10 @@ fn reads_rows() {
     if !ort() {
         return;
     }
-    let mut finder = RowFinder::load(&model("rows/model.onnx"), 1).unwrap();
+    let mut locator = HudLocator::load(&model("hud/model.onnx"), 1).unwrap();
     let mut reader = IconReader::load(&model("icons/model.onnx"), 1).unwrap();
+    let rows = locator.rows(&frame_with_my_rows(), CORNER).unwrap();
     let corner = corner_with_my_rows();
-    let rows = finder.find(&corner).unwrap();
     let readings = reader.read(&corner, &rows).unwrap();
     assert_eq!(readings.len(), 2);
     // The AK-47 beats the AWP; the headshot and flash assist are sure enough, the
@@ -265,17 +287,16 @@ fn analyses_a_clip() {
     if !ort() {
         return;
     }
-    let mut finder = RowFinder::load(&model("rows/model.onnx"), 1).unwrap();
+    let mut locator = HudLocator::load(&model("hud/model.onnx"), 1).unwrap();
     let mut reader = IconReader::load(&model("icons/model.onnx"), 1).unwrap();
-    assert_eq!(crop_box(640, 360), (370, 0, CORNER.0, CORNER.1));
-    let mut analyzer = Analyzer::new(&mut finder, &mut reader);
+    let mut analyzer = Analyzer::new(&mut locator, &mut reader);
     // A dark first second (no rows), then the two rows for three seconds.
     analyzer
-        .push(0.0, &RgbImage::new(CORNER.0, CORNER.1))
+        .push(0.0, &RgbImage::new(FRAME.0, FRAME.1))
         .unwrap();
-    let corner = corner_with_my_rows();
+    let frame = frame_with_my_rows();
     for t in 1..4 {
-        analyzer.push(f64::from(t), &corner).unwrap();
+        analyzer.push(f64::from(t), &frame).unwrap();
     }
     assert_eq!(analyzer.frames(), 4);
     let kills = analyzer.finish();

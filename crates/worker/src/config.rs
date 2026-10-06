@@ -65,7 +65,7 @@ pub struct Config {
     pub x264_crf: u32,
 
     /// Killfeed analysis of CS2 clips (phase 8). Needs ONNX Runtime (ORT_DYLIB_PATH) and
-    /// the models in the `models` container.
+    /// the models, in the worker image or the `models` container.
     #[arg(long, env = "KILLFEED_ANALYSE", default_value_t = true, action = clap::ArgAction::Set)]
     pub killfeed_analyse: bool,
 
@@ -77,11 +77,21 @@ pub struct Config {
     )]
     pub killfeed_models_dir: PathBuf,
 
-    /// Row-finder model, `<name>/<version>` in the `models` container.
-    #[arg(long, env = "KILLFEED_ROWS_MODEL", default_value = "killfeed-rows/v1")]
-    pub killfeed_rows_model: String,
+    /// Models the worker image carries, as `<name>/<version>/` folders; a version that
+    /// isn't there is downloaded from the `models` container.
+    #[arg(
+        long,
+        env = "KILLFEED_BAKED_MODELS_DIR",
+        default_value = "/opt/clipos/models"
+    )]
+    pub killfeed_baked_models_dir: PathBuf,
 
-    /// Icon model, `<name>/<version>` in the `models` container.
+    /// HUD locator, which finds the killfeed rows: `<name>/<version>`. The versions the
+    /// image carries are listed in deploy/worker-models.txt.
+    #[arg(long, env = "KILLFEED_HUD_MODEL", default_value = "hud-locator/v1")]
+    pub killfeed_hud_model: String,
+
+    /// Icon model, `<name>/<version>`.
     #[arg(
         long,
         env = "KILLFEED_ICONS_MODEL",

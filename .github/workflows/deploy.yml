@@ -184,6 +184,30 @@ jobs:
           build-args: CLIPOS_VERSION=${{ github.sha }}
           cache-from: type=gha,scope=api-runtime
           cache-to: type=gha,scope=api-runtime
+      # The killfeed models the worker image carries (deploy/worker-models.txt), read from
+      # the `models` container (the deploy identity may only read that one, storage.tf)
+      # and checked against their model cards before they go in.
+      - name: worker models
+        env:
+          MODELS: ${{ runner.temp }}/models
+        run: |
+          account=$(az storage account list -g "$RESOURCE_GROUP" \
+            --query "[?starts_with(name, 'stclipos')].name | [0]" -o tsv)
+          echo "::add-mask::$account"
+          mkdir -p "$MODELS"
+          grep -v '^#' deploy/worker-models.txt | while read -r model; do
+            [ -n "$model" ] || continue
+            mkdir -p "$MODELS/$model"
+            # What the worker loads; the training checkpoint and logs stay in storage.
+            for file in model.onnx classes.json model-card.json; do
+              az storage blob download --auth-mode login --account-name "$account" \
+                --container-name models --name "$model/$file" --file "$MODELS/$model/$file" \
+                --no-progress -o none
+            done
+            (cd "$MODELS/$model" && jq -r '.files | to_entries[]
+              | select(.key == "model.onnx" or .key == "classes.json")
+              | "\(.value.sha256)  \(.key)"' model-card.json | sha256sum --check --strict)
+          done
       - name: worker image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
@@ -192,7 +216,9 @@ jobs:
         with:
           context: .
           file: deploy/worker.Dockerfile
-          build-contexts: bin=out/worker
+          build-contexts: |
+            bin=out/worker
+            models=${{ runner.temp }}/models
           push: true
           # No provenance: even min mode records GitHub's whole push payload (commit
           # authors' emails included) and prints it in the public build log. The images
@@ -200,8 +226,9 @@ jobs:
           provenance: false
           tags: ${{ steps.acr.outputs.server }}/clipos-worker:${{ github.sha }}
           build-args: CLIPOS_VERSION=${{ github.sha }}
-          cache-from: type=gha,scope=worker-runtime
-          cache-to: type=gha,scope=worker-runtime
+          # No GitHub Actions cache: its layers would include the models, and in a public
+          # repository a fork's pull request can restore the caches main saved. The image's
+          # other layers (Debian packages, ONNX Runtime) rebuild in about a minute.
       - name: grafana image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
