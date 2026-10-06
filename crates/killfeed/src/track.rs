@@ -18,7 +18,14 @@ use crate::{Owner, Reading, Row};
 const MAX_GAP_S: f64 = 2.0;
 /// Snapshot similarity needed to continue a track.
 const MIN_SIMILARITY: f32 = 0.7;
+/// Width a row moved up may differ from its track's by: the row models' boxes for the same
+/// row vary by about 1.5% from frame to frame.
+const MOVED_UP_WIDTH: f32 = 0.04;
 const THUMB: (u32, u32) = (96, 8);
+/// How far inside the row's box its snapshot is taken, horizontally and vertically, in row
+/// heights. The two row models' boxes for the same row differ by up to about 0.09 of a row
+/// height at the ends and 0.04 at the top and bottom (95% of rows).
+const INSET: (f32, f32) = (0.5, 0.15);
 
 /// One kill: a row followed from when it appeared until it left.
 #[derive(Debug, Clone, Serialize)]
@@ -76,11 +83,12 @@ impl Tracker {
                 }
                 let similarity = correlation(thumb, &track.thumb);
                 // A row fading in or out looks different from frame to frame; the same
-                // icons in a row of the same width are the same row too.
-                let same_content = track.readings.last().is_some_and(|last| {
-                    same_icons(last, reading)
-                        && (row.width() - track.row.width()).abs() <= 0.06 * track.row.width()
-                });
+                // icons in a row of the same width are the same row too. The icons are
+                // compared with every reading of the track, since a hard-to-tell weapon
+                // (P2000 or Five-SeveN) can be read one way, then the other.
+                let same_content = (row.width() - track.row.width()).abs()
+                    <= 0.06 * track.row.width()
+                    && track.readings.iter().any(|seen| same_icons(seen, reading));
                 if similarity >= MIN_SIMILARITY || same_content {
                     pairs.push((
                         similarity.max(if same_content { MIN_SIMILARITY } else { 0.0 }),
@@ -94,6 +102,33 @@ impl Tracker {
         let mut row_track: HashMap<usize, usize> = HashMap::new();
         let mut taken = vec![false; self.active.len()];
         for (_, i, j) in pairs {
+            if !taken[j] && !row_track.contains_key(&i) {
+                taken[j] = true;
+                row_track.insert(i, j);
+            }
+        }
+        // Rows only move up, as older ones leave the killfeed, and a new row appears below
+        // the others. So a row left over that sits higher than a track left over, at the
+        // same width, is that track's row moved up, even if it looks different now (the
+        // scene behind it changed) and its icons weren't read.
+        let mut moved = Vec::new();
+        for (i, (row, _, _)) in rows.iter().enumerate() {
+            if row_track.contains_key(&i) {
+                continue;
+            }
+            for (j, track) in self.active.iter().enumerate() {
+                let up = track.row.y0 - row.y0;
+                let width = (row.width() - track.row.width()).abs();
+                if !taken[j]
+                    && up >= 0.5 * track.row.height()
+                    && width <= MOVED_UP_WIDTH * track.row.width()
+                {
+                    moved.push((width, i, j));
+                }
+            }
+        }
+        moved.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, i, j) in moved {
             if !taken[j] && !row_track.contains_key(&i) {
                 taken[j] = true;
                 row_track.insert(i, j);
@@ -162,10 +197,14 @@ fn summarise(track: Track) -> Kill {
         .map(|(name, _)| name.to_owned())
         .collect();
     modifiers.sort();
-    let owner = owners
+    // The most common owner. A tie goes to the player's own: a frame missing the outline
+    // or the fill (a flash, a fading row) is likelier than one showing it on someone else's
+    // row. Fixed order, so a clip reads the same on every run.
+    let count = |owner: Owner| owners.get(&owner).copied().unwrap_or(0);
+    let owner = [Owner::Other, Owner::MyDeath, Owner::MyKill]
         .into_iter()
-        .max_by_key(|(_, count)| *count)
-        .map_or(Owner::Other, |(owner, _)| owner);
+        .max_by_key(|&owner| count(owner))
+        .unwrap_or(Owner::Other);
     let clearest = (0..n)
         .max_by(|&a, &b| {
             let score = |i: usize| track.readings[i].weapon.as_ref().map_or(0.0, |(_, s)| *s);
@@ -183,8 +222,23 @@ fn summarise(track: Track) -> Kill {
     }
 }
 
-/// A small grayscale picture of the whole row, names included.
+/// A small grayscale picture of the row, names included. Taken a little inside the box: a
+/// loose box takes in some of the scene around the row, which changes from frame to frame
+/// as the camera moves.
 fn thumbnail(corner: &RgbImage, row: &Row) -> Vec<f32> {
+    let (dx, dy) = (INSET.0 * row.height(), INSET.1 * row.height());
+    let inside = Row {
+        x0: row.x0 + dx,
+        y0: row.y0 + dy,
+        x1: row.x1 - dx,
+        y1: row.y1 - dy,
+        ..*row
+    };
+    let row = if inside.width() >= 1.0 && inside.height() >= 1.0 {
+        &inside
+    } else {
+        row
+    };
     let x0 = row.x0.max(0.0) as u32;
     let y0 = row.y0.max(0.0) as u32;
     let w = (row.width() as u32).clamp(1, corner.width() - x0.min(corner.width() - 1));
@@ -237,7 +291,18 @@ mod tests {
     /// A 300 x 200 corner with rows `(look, y)`: each a 200 x 16 strip of noise, right
     /// aligned, the same for the same `look` and unrelated for different ones.
     fn corner(rows: &[(u32, f32)]) -> RgbImage {
+        corner_on(None, rows)
+    }
+
+    /// [`corner`] over a scene: noise of `scene`'s look, or black.
+    fn corner_on(scene: Option<u32>, rows: &[(u32, f32)]) -> RgbImage {
         let mut corner = RgbImage::new(300, 200);
+        if let Some(scene) = scene {
+            for (x, y, p) in corner.enumerate_pixels_mut() {
+                let v = noise(x / 3 + 1000 * (y / 3), scene);
+                *p = Rgb([v, v, v]);
+            }
+        }
         for &(look, y) in rows {
             for x in 100..300 {
                 let v = noise(x / 5, look);
@@ -481,13 +546,113 @@ mod tests {
         };
         let thumb = thumbnail(&c, &past);
         assert_eq!(thumb.len(), (THUMB.0 * THUMB.1) as usize);
-        assert_eq!(thumb, thumbnail(&c, &inside));
+        assert_eq!(thumbnail(&c, &inside).len(), thumb.len());
+        // Too small to take a snapshot inside: the whole box.
+        let tiny = Row {
+            x0: 250.0,
+            y0: 40.0,
+            x1: 252.0,
+            y1: 41.0,
+            score: 1.0,
+        };
+        assert_eq!(thumbnail(&c, &tiny).len(), thumb.len());
         // The test rows: the same look matches, different looks don't.
         let look = |n| thumbnail(&corner(&[(n, 40.0)]), &row(40.0));
         assert!(correlation(&look(1), &look(1)) > 0.999);
         for other in 2..6 {
             assert!(correlation(&look(1), &look(other)) < MIN_SIMILARITY);
         }
+    }
+
+    #[test]
+    fn a_loose_box_over_a_moving_scene_still_matches_the_row() {
+        // The same row in two frames with different scenes around it; the second box
+        // takes in 4 px of the scene above and below (a snapshot of the whole box would
+        // match at only 0.66).
+        let before = corner_on(Some(7), &[(1, 40.0)]);
+        let after = corner_on(Some(8), &[(1, 40.0)]);
+        let loose = Row {
+            x0: 98.0,
+            y0: 36.0,
+            y1: 60.0,
+            ..row(40.0)
+        };
+        let similarity = correlation(&thumbnail(&before, &row(40.0)), &thumbnail(&after, &loose));
+        assert!(similarity >= MIN_SIMILARITY, "{similarity}");
+    }
+
+    #[test]
+    fn a_weapon_read_two_ways_is_still_one_row() {
+        // A hard-to-tell pistol, read as one, then the other, over a scene that changes
+        // the row's look: the same width and icons the row was read with before.
+        let mut tracker = Tracker::default();
+        let p2000 = reading(Owner::Other, Some(("hkp2000", 0.6)), &["headshot"]);
+        let fiveseven = reading(Owner::Other, Some(("fiveseven", 0.6)), &["headshot"]);
+        push(&mut tracker, 0.0, &[(1, 40.0, fiveseven.clone())]);
+        push(&mut tracker, 1.0, &[(1, 40.0, p2000)]);
+        push(&mut tracker, 2.0, &[(2, 40.0, fiveseven)]);
+        let kills = tracker.finish();
+        let seen: Vec<_> = kills.iter().map(|k| (k.t, k.sightings)).collect();
+        assert_eq!(seen, vec![(0.0, 3)]);
+    }
+
+    #[test]
+    fn rows_moving_up_stay_their_kills() {
+        let mut tracker = Tracker::default();
+        let ak = reading(Owner::Other, ak(0.9), &[]);
+        let awp = reading(Owner::Other, Some(("awp", 0.9)), &[]);
+        push(
+            &mut tracker,
+            0.0,
+            &[(1, 20.0, ak.clone()), (2, 40.0, awp.clone())],
+        );
+        push(&mut tracker, 1.0, &[(1, 20.0, ak), (2, 40.0, awp)]);
+        // The top row left; the other moved up into its place, over another scene and
+        // with no weapon read.
+        let blank = reading(Owner::Other, None, &[]);
+        push(&mut tracker, 2.0, &[(3, 20.0, blank.clone())]);
+        push(&mut tracker, 3.0, &[(3, 20.0, blank)]);
+        let kills = tracker.finish();
+        let seen: Vec<_> = kills
+            .iter()
+            .map(|k| (k.t, k.last_seen, k.sightings))
+            .collect();
+        assert_eq!(seen, vec![(0.0, 1.0, 2), (0.0, 3.0, 4)]);
+        assert_eq!(kills[1].weapon.as_deref(), Some("awp"));
+    }
+
+    #[test]
+    fn a_new_row_where_one_left_is_another_kill() {
+        // A row leaves and a new one of the same width shows up in its place: rows never
+        // move down or stay put for another, so it's a new kill.
+        let mut tracker = Tracker::default();
+        let blank = reading(Owner::Other, None, &[]);
+        push(&mut tracker, 0.0, &[(1, 20.0, blank.clone())]);
+        push(&mut tracker, 1.0, &[(1, 20.0, blank.clone())]);
+        push(&mut tracker, 2.0, &[(2, 20.0, blank.clone())]);
+        push(&mut tracker, 3.0, &[(2, 20.0, blank)]);
+        let kills = tracker.finish();
+        let seen: Vec<_> = kills.iter().map(|k| (k.t, k.sightings)).collect();
+        assert_eq!(seen, vec![(0.0, 2), (2.0, 2)]);
+    }
+
+    #[test]
+    fn a_tied_owner_goes_to_the_player() {
+        let kill = |owners: &[Owner]| {
+            let mut tracker = Tracker::default();
+            for (t, &owner) in owners.iter().enumerate() {
+                push(
+                    &mut tracker,
+                    t as f64,
+                    &[(1, 40.0, reading(owner, ak(0.9), &[]))],
+                );
+            }
+            tracker.finish()[0].owner
+        };
+        use Owner::*;
+        assert_eq!(kill(&[Other, MyDeath, MyDeath, Other]), MyDeath);
+        assert_eq!(kill(&[MyKill, Other]), MyKill);
+        assert_eq!(kill(&[Other, MyDeath, Other]), Other);
     }
 
     #[test]

@@ -433,7 +433,7 @@ async fn purges_clips_after_a_week_in_the_trash(pool: PgPool) {
 /// and a labelled clip, so it only runs when pointed at them:
 ///
 ///     CLIPOS_AZURITE=1 ORT_DYLIB_PATH=.../libonnxruntime.dylib \
-///     CLIPOS_KILLFEED_MODELS=<dir with killfeed-rows/v1 and killfeed-icons/v1> \
+///     CLIPOS_KILLFEED_MODELS=<dir with hud-locator/v1 and killfeed-icons/v1> \
 ///     CLIPOS_KILLFEED_CLIP=<a labelled CS2 clip>.mp4 \
 ///     cargo test -p clipos-worker analyses_a_cs2_clip
 ///
@@ -455,12 +455,13 @@ async fn analyses_a_cs2_clip(pool: PgPool) {
     let mut worker = worker(pool.clone());
     worker.analyse = Some(AnalyseConfig {
         models_dir: cache.path().to_owned(),
-        rows_model: "killfeed-rows/v1".into(),
+        baked_dir: cache.path().join("no-baked-models"),
+        hud_model: "hud-locator/v1".into(),
         icons_model: "killfeed-icons/v1".into(),
         threads: 4,
     });
     worker.storage.prepare_local(&[]).await.unwrap();
-    for model in ["killfeed-rows/v1", "killfeed-icons/v1"] {
+    for model in ["hud-locator/v1", "killfeed-icons/v1"] {
         for file in ["model.onnx", "classes.json", "model-card.json"] {
             worker
                 .storage
@@ -483,12 +484,46 @@ async fn analyses_a_cs2_clip(pool: PgPool) {
         .unwrap()
         .expect("analysis stored");
 
-    assert_eq!(version, "rows=killfeed-rows/v1 icons=killfeed-icons/v1");
+    assert_eq!(version, "hud=hud-locator/v1 icons=killfeed-icons/v1");
     assert_eq!(stats["kills"], 3, "{raw}");
     assert_eq!(stats["my_kills"], 1, "{raw}");
     assert_eq!(stats["my_deaths"], 1, "{raw}");
     assert_eq!(stats["weapons"], json!({ "tec9": 1 }), "{raw}");
     assert!(cache.path().join("killfeed-icons/v1/.verified").exists());
+}
+
+/// deploy.yml bakes the model versions deploy/worker-models.txt lists into the worker
+/// image; they must be the ones the worker uses unless told otherwise.
+#[test]
+fn the_image_carries_the_default_models() {
+    use clap::CommandFactory;
+    let command = crate::config::Config::command();
+    let default = |id: &str| {
+        command
+            .get_arguments()
+            .find(|a| a.get_id() == id)
+            .unwrap()
+            .get_default_values()[0]
+            .to_str()
+            .unwrap()
+            .to_owned()
+    };
+    let listed: Vec<String> = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/worker-models.txt"),
+    )
+    .unwrap()
+    .lines()
+    .map(str::trim)
+    .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(
+        listed,
+        vec![
+            default("killfeed_hud_model"),
+            default("killfeed_icons_model")
+        ]
+    );
 }
 
 #[test]
@@ -1492,7 +1527,7 @@ fn sample(
     let started = std::time::Instant::now();
     std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + limit;
-        let result = analyse::sample_corner(&input, deadline, |_, _| {
+        let result = analyse::sample_frames(&input, deadline, |_, _| {
             frame();
             Ok(())
         });
@@ -1920,7 +1955,8 @@ async fn queues_killfeed_analysis_for_the_uploaders_own_view(pool: PgPool) {
     let mut worker = worker(pool.clone());
     worker.analyse = Some(AnalyseConfig {
         models_dir: dir.path().join("models"),
-        rows_model: "killfeed-rows/v1".into(),
+        baked_dir: dir.path().join("baked-models"),
+        hud_model: "hud-locator/v1".into(),
         icons_model: "killfeed-icons/v1".into(),
         threads: 1,
     });

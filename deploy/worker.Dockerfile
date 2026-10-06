@@ -3,6 +3,11 @@
 #
 # Builds the binary from source. deploy.yml builds it on the runner instead (with a warm
 # cargo cache) and passes it in as the `bin` stage: --build-context bin=<dir with clipos-worker>
+#
+# The killfeed models come in the same way, as the `models` stage: deploy.yml downloads the
+# versions deploy/worker-models.txt lists from the `models` container (--build-context
+# models=<dir with hud-locator/v1/...>). Without them, as in the audit build, the image
+# carries none and the worker downloads them on its first analysis.
 
 FROM rust:1.98-trixie AS build
 WORKDIR /src
@@ -14,6 +19,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM scratch AS bin
 COPY --from=build /usr/local/bin/clipos-worker /clipos-worker
+
+FROM scratch AS models
 
 # Microsoft's official ONNX Runtime build, pinned by checksum; the worker loads it at
 # runtime (ORT_DYLIB_PATH) to run the killfeed models.
@@ -42,9 +49,12 @@ RUN apt-get update \
     && useradd --system --uid 10001 --no-create-home clipos
 COPY --from=bin /clipos-worker /usr/local/bin/clipos-worker
 COPY --from=onnxruntime /opt/onnxruntime /opt/onnxruntime
+# Read-only for the worker, which checks each against its model card before using it.
+COPY --from=models / /opt/clipos/models/
 ENV BIND_ADDR=0.0.0.0:8081 \
     LOG_FORMAT=json \
-    ORT_DYLIB_PATH=/opt/onnxruntime/libonnxruntime.so
+    ORT_DYLIB_PATH=/opt/onnxruntime/libonnxruntime.so \
+    KILLFEED_BAKED_MODELS_DIR=/opt/clipos/models
 # Set by deploy.yml to the git SHA; reported in the x-clipos-version header on /healthz.
 ARG CLIPOS_VERSION=dev
 ENV CLIPOS_VERSION=${CLIPOS_VERSION}
