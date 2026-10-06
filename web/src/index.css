@@ -59,8 +59,10 @@ body {
 /* A frosted panel: the redesign's one surface for things that sit over the page. */
 @utility glass {
   background: rgb(28 29 33 / 0.72);
+  /* Here and below, backdrop-filter is written unprefixed only: with -webkit- too, the
+     build's minifier keeps just the -webkit- one, which Chrome ignores. It adds the
+     prefix itself. */
   backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid rgb(255 255 255 / 0.07);
 }
 
@@ -73,8 +75,6 @@ body {
     inset: 0 0 -20px;
     z-index: -1;
     background: rgb(14 14 16 / 0.6);
-    /* Unprefixed only: with both, the build's minifier keeps just the -webkit- one, which
-       Chrome ignores. It adds the prefix itself. */
     backdrop-filter: blur(18px) saturate(120%);
     mask-image: linear-gradient(#000 70%, transparent);
     pointer-events: none;
@@ -85,7 +85,6 @@ body {
 @utility frost {
   background: rgb(20 21 24 / 0.55);
   backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 /* Apple-style continuous corners where the browser has them; plain radii elsewhere.
