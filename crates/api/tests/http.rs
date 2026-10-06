@@ -4851,7 +4851,8 @@ async fn two_host_tabs_take_turns(pool: PgPool) {
     let (mut tab1, _) = ws_join(addr, &show, &admin).await;
     let (mut tab2, _) = ws_join(addr, &show, &admin).await;
     let (mut friend, _) = ws_join(addr, &show, &kim).await;
-    ws_send(&mut tab1, json!({ "type": "load", "clipId": a })).await;
+    // The friend loads it (anyone steers), so each tab's 20 changes fit in its burst.
+    ws_send(&mut friend, json!({ "type": "load", "clipId": a })).await;
     for ws in [&mut tab1, &mut tab2, &mut friend] {
         ws_next(ws, "state").await;
     }
@@ -5475,23 +5476,34 @@ async fn a_whole_show_over_the_live_room(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
 
     // Every clip: load, play, pause, three seeks (past the end clamps to its length, before
-    // the start to 0), play again.
-    for clip in [&a, &b, &c] {
-        ws_send(&mut host, json!({ "type": "load", "clipId": clip })).await;
-        ws_send(&mut host, json!({ "type": "play" })).await;
-        ws_send(&mut host, json!({ "type": "pause" })).await;
+    // the start to 0), play again. The host steers the first, friends the others (anyone
+    // in the show steers); each clip's changes reach every screen before the next one's
+    // start, since changes from different connections may land in any order.
+    let mut seen = vec![Vec::new(); 1 + friends.len()];
+    for (clip, i) in [(&a, None), (&b, Some(0)), (&c, Some(1))] {
+        let ws = match i {
+            None => &mut host,
+            Some(i) => &mut friends[i],
+        };
+        ws_send(ws, json!({ "type": "load", "clipId": clip })).await;
+        ws_send(ws, json!({ "type": "play" })).await;
+        ws_send(ws, json!({ "type": "pause" })).await;
         for position in [2500, 99999, -5] {
-            ws_send(&mut host, json!({ "type": "seek", "positionMs": position })).await;
+            ws_send(ws, json!({ "type": "seek", "positionMs": position })).await;
         }
-        ws_send(&mut host, json!({ "type": "play" })).await;
+        ws_send(ws, json!({ "type": "play" })).await;
+        for (ws, seen) in std::iter::once(&mut host)
+            .chain(friends.iter_mut())
+            .zip(seen.iter_mut())
+        {
+            for _ in 0..7 {
+                seen.push(ws_next(ws, "state").await);
+            }
+        }
     }
     // Everyone gets every change, in order.
-    for ws in std::iter::once(&mut host).chain(friends.iter_mut()) {
-        let mut seen = Vec::new();
-        for _ in 0..21 {
-            seen.push(ws_next(ws, "state").await);
-        }
-        assert_eq!(seqs(&seen), (1..=21).collect::<Vec<_>>());
+    for seen in &seen {
+        assert_eq!(seqs(seen), (1..=21).collect::<Vec<_>>());
         assert_eq!(seen[4]["state"]["positionMs"], 5000.0);
         assert_eq!(seen[5]["state"]["positionMs"], 0.0);
     }
