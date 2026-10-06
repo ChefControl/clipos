@@ -48,7 +48,7 @@ export function Layout() {
         Skip to content
       </a>
       <Backdrop />
-      <header className="sticky top-0 z-20 bg-gradient-to-b from-bg/80 to-bg/0 backdrop-blur-[2px]">
+      <header className="topbar sticky top-0 z-20">
         <div
           className={`mx-auto flex h-16 ${width} items-center gap-3 px-4 sm:h-[76px] sm:px-10 sm:gap-6`}
         >
