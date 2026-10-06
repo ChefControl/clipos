@@ -10,6 +10,9 @@ export type LineupEntry = components["schemas"]["LineupEntry"];
 export type Category = "clip" | "fail";
 export type TieBreak = components["schemas"]["TieBreak"];
 
+/** The most clips one show plays (decision 56; `shows::MAX_CLIPS` on the server). */
+export const MAX_CLIPS = 10;
+
 /** Tonight: the show that's on, or the clips the next one would play. Polled, so a show
  *  someone else opens turns up without a reload. */
 export function useTonight() {

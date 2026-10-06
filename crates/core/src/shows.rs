@@ -21,6 +21,10 @@ const FIRST_SHOW_DAYS: i32 = 7;
 /// How far past a clip's end a show reaction's moment may be.
 const REACTION_SLACK_MS: i32 = 1000;
 
+/// The most clips one show plays (decision 56). Tonight's clips past it wait for the next
+/// show as spares.
+pub const MAX_CLIPS: usize = 10;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, ToSchema)]
 #[sqlx(type_name = "text", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
@@ -99,6 +103,9 @@ pub struct LineupClip {
     pub position: i32,
     pub added_by: Option<Uuid>,
     pub dropped: bool,
+    /// Dropped because the lineup was full (`MAX_CLIPS`), not by the host: it waits for
+    /// the next show, and doesn't count as dropped there (decision 56).
+    pub spare: bool,
     pub played_at: Option<DateTime<Utc>>,
 }
 
@@ -209,7 +216,7 @@ pub async fn past(pool: &PgPool, limit: i64) -> sqlx::Result<Vec<Show>> {
 /// was ever in a lineup comes back too, however old (someone added it from the archive).
 /// Except a clip dropped in two ended shows: it stops coming back (decision 28). It stays
 /// in the archive, and anyone in a show can still add it (`add_clip`). An abandoned show's
-/// drops don't count.
+/// drops don't count, and nor do spares, which only didn't fit (decision 56).
 pub async fn tonight(pool: &PgPool) -> sqlx::Result<Vec<Uuid>> {
     sqlx::query_scalar(
         "SELECT c.id FROM clips c
@@ -221,7 +228,8 @@ pub async fn tonight(pool: &PgPool) -> sqlx::Result<Vec<Uuid>> {
                                 - make_interval(days => $1)
                  OR EXISTS (SELECT FROM show_clips sc WHERE sc.clip_id = c.id))
             AND (SELECT count(*) FROM show_clips sc JOIN shows s ON s.id = sc.show_id
-                  WHERE sc.clip_id = c.id AND sc.dropped AND s.status = 'ended') < 2
+                  WHERE sc.clip_id = c.id AND sc.dropped AND NOT sc.spare
+                    AND s.status = 'ended') < 2
           ORDER BY c.created_at, c.id",
     )
     .bind(FIRST_SHOW_DAYS)
@@ -229,9 +237,9 @@ pub async fn tonight(pool: &PgPool) -> sqlx::Result<Vec<Uuid>> {
     .await
 }
 
-/// Opens a show with tonight's clips as its lineup; the host joins it. Anyone can host
-/// (decision 28), but only one show can be open. Clips that turn up while it's in the
-/// lobby join at `start`.
+/// Opens a show with tonight's clips as its lineup, the first `MAX_CLIPS` of them (the rest
+/// are spares); the host joins it. Anyone can host (decision 28), but only one show can be
+/// open. Clips that turn up while it's in the lobby join at `start`.
 pub async fn create(pool: &PgPool, host: Uuid) -> Result<Show> {
     let clips = tonight(pool).await?;
     let mut tx = pool.begin().await?;
@@ -258,7 +266,8 @@ pub async fn create(pool: &PgPool, host: Uuid) -> Result<Show> {
     Ok(show)
 }
 
-/// Puts `clips` at the end of the lineup, in order, added by `by`.
+/// Puts `clips` at the end of the lineup, in order, added by `by`: as many as fit under
+/// `MAX_CLIPS`, and the rest as spares.
 async fn append(
     conn: &mut sqlx::PgConnection,
     show: Uuid,
@@ -266,14 +275,18 @@ async fn append(
     clips: &[Uuid],
 ) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO show_clips (show_id, clip_id, position, added_by)
-         SELECT $1, c, (SELECT COALESCE(max(position) + 1, 0) FROM show_clips
-                         WHERE show_id = $1) + (n - 1)::int, $2
-           FROM unnest($3::uuid[]) WITH ORDINALITY AS t(c, n)",
+        "INSERT INTO show_clips (show_id, clip_id, position, added_by, dropped, spare)
+         SELECT $1, c, at.next + (n - 1)::int, $2, n > room.free, n > room.free
+           FROM unnest($3::uuid[]) WITH ORDINALITY AS t(c, n),
+                (SELECT COALESCE(max(position) + 1, 0) AS next FROM show_clips
+                  WHERE show_id = $1) AS at,
+                (SELECT $4 - count(*) FILTER (WHERE NOT dropped) AS free FROM show_clips
+                  WHERE show_id = $1) AS room",
     )
     .bind(show)
     .bind(by)
     .bind(clips)
+    .bind(MAX_CLIPS as i64)
     .execute(conn)
     .await?;
     Ok(())
@@ -281,7 +294,7 @@ async fn append(
 
 pub async fn lineup(pool: &PgPool, show: Uuid) -> sqlx::Result<Vec<LineupClip>> {
     sqlx::query_as(
-        "SELECT clip_id, position, added_by, dropped, played_at FROM show_clips
+        "SELECT clip_id, position, added_by, dropped, spare, played_at FROM show_clips
           WHERE show_id = $1 ORDER BY position, clip_id",
     )
     .bind(show)
@@ -416,9 +429,10 @@ pub async fn in_live_lineup(pool: &PgPool, clip: Uuid, user: Uuid) -> sqlx::Resu
 }
 
 /// The host reorders the clips still to play and drops the ones left out (they stay for
-/// the next show). The whole lineup is numbered again: played clips first, in the order
-/// they played (the host may have played them out of order), then `order`, then the
-/// dropped ones. The lineup is read with its rows locked: a clip starting to play right
+/// the next show), up to `MAX_CLIPS` in all with the played ones. The whole lineup is
+/// numbered again: played clips first, in the order they played (anyone may have played
+/// them out of order), then `order`, then the dropped ones. A spare left out stays a
+/// spare. The lineup is read with its rows locked: a clip starting to play right
 /// then (`mark_played`) is waited for and counts as played, so it's never dropped.
 pub async fn set_lineup(pool: &PgPool, id: Uuid, by: Uuid, order: &[Uuid]) -> Result<()> {
     let mut tx = pool.begin().await?;
@@ -430,7 +444,7 @@ pub async fn set_lineup(pool: &PgPool, id: Uuid, by: Uuid, order: &[Uuid]) -> Re
         "change the lineup",
     )?;
     let rows: Vec<LineupClip> = sqlx::query_as(
-        "SELECT clip_id, position, added_by, dropped, played_at FROM show_clips
+        "SELECT clip_id, position, added_by, dropped, spare, played_at FROM show_clips
           WHERE show_id = $1 ORDER BY position, clip_id FOR UPDATE",
     )
     .bind(id)
@@ -456,34 +470,50 @@ pub async fn set_lineup(pool: &PgPool, id: Uuid, by: Uuid, order: &[Uuid]) -> Re
     }
     let mut played: Vec<&LineupClip> = rows.iter().filter(|r| r.played_at.is_some()).collect();
     played.sort_by_key(|r| (r.played_at, r.position));
+    if played.len() + order.len() > MAX_CLIPS {
+        return Err(ShowError::Invalid(format!(
+            "a show has at most {MAX_CLIPS} clips"
+        )));
+    }
     let dropped = rows
         .iter()
         .filter(|r| r.played_at.is_none() && !order.contains(&r.clip_id));
-    let (clips, drops): (Vec<Uuid>, Vec<bool>) = played
+    let mut clips = Vec::with_capacity(rows.len());
+    let mut drops = Vec::with_capacity(rows.len());
+    let mut spares = Vec::with_capacity(rows.len());
+    for (clip, drop, spare) in played
         .iter()
-        .map(|r| (r.clip_id, false))
-        .chain(order.iter().map(|c| (*c, false)))
-        .chain(dropped.map(|r| (r.clip_id, true)))
-        .unzip();
+        .map(|r| (r.clip_id, false, false))
+        .chain(order.iter().map(|c| (*c, false, false)))
+        .chain(dropped.map(|r| (r.clip_id, true, r.dropped && r.spare)))
+    {
+        clips.push(clip);
+        drops.push(drop);
+        spares.push(spare);
+    }
     let positions: Vec<i32> = (0..clips.len() as i32).collect();
     sqlx::query(
-        "UPDATE show_clips sc SET position = t.position, dropped = t.dropped
-           FROM unnest($2::uuid[], $3::int[], $4::bool[]) AS t(clip_id, position, dropped)
+        "UPDATE show_clips sc
+            SET position = t.position, dropped = t.dropped, spare = t.spare
+           FROM unnest($2::uuid[], $3::int[], $4::bool[], $5::bool[])
+                AS t(clip_id, position, dropped, spare)
           WHERE sc.show_id = $1 AND sc.clip_id = t.clip_id",
     )
     .bind(id)
     .bind(&clips)
     .bind(&positions)
     .bind(&drops)
+    .bind(&spares)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(())
 }
 
-/// Anyone in the show adds a clip to the end of the queue (decision 31). A dropped clip
-/// comes back the same way. A clip saved for the show is only its uploader's to add: to
-/// anyone else it doesn't exist (decision 29), like someone else's unpublished clip.
+/// Anyone in the show adds a clip to the end of the queue (decision 31), while it has
+/// fewer than `MAX_CLIPS`. A dropped clip or a spare comes back the same way. A clip saved
+/// for the show is only its uploader's to add: to anyone else it doesn't exist (decision
+/// 29), like someone else's unpublished clip.
 pub async fn add_clip(pool: &PgPool, id: Uuid, by: Uuid, clip: Uuid) -> Result<()> {
     let mut tx = pool.begin().await?;
     let show = lock_open_show(&mut tx, id).await?;
@@ -506,12 +536,27 @@ pub async fn add_clip(pool: &PgPool, id: Uuid, by: Uuid, clip: Uuid) -> Result<(
         }
         _ => return Err(ShowError::NotFound),
     }
+    let (count, there): (i64, bool) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE NOT dropped),
+                coalesce(bool_or(clip_id = $2 AND NOT dropped), false)
+           FROM show_clips WHERE show_id = $1",
+    )
+    .bind(id)
+    .bind(clip)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !there && count >= MAX_CLIPS as i64 {
+        return Err(ShowError::Conflict(format!(
+            "a show has at most {MAX_CLIPS} clips"
+        )));
+    }
     let changed = sqlx::query(
         "INSERT INTO show_clips (show_id, clip_id, position, added_by)
          VALUES ($1, $2, (SELECT COALESCE(max(position) + 1, 0) FROM show_clips
                            WHERE show_id = $1), $3)
          ON CONFLICT (show_id, clip_id) DO UPDATE
-            SET dropped = false, position = EXCLUDED.position, added_by = EXCLUDED.added_by
+            SET dropped = false, spare = false, position = EXCLUDED.position,
+                added_by = EXCLUDED.added_by
           WHERE show_clips.dropped",
     )
     .bind(id)
@@ -580,8 +625,9 @@ async fn advance(pool: &PgPool, id: Uuid, from: ShowStatus, to: ShowStatus) -> R
 }
 
 /// The host presses Start, ready or not (decision 31). Clips uploaded while the show was
-/// in the lobby (or still processing when it opened) join the end of the lineup; from
-/// now on new ones wait for the next show (decision 28).
+/// in the lobby (or still processing when it opened) join the end of the lineup while it
+/// has room (the rest are spares); from now on new ones wait for the next show (decision
+/// 28).
 pub async fn start(pool: &PgPool, id: Uuid, by: Uuid) -> Result<()> {
     let show = open_show(pool, id).await?;
     host_only(&show, by)?;
@@ -608,11 +654,13 @@ pub async fn start(pool: &PgPool, id: Uuid, by: Uuid) -> Result<()> {
     Ok(())
 }
 
-/// A clip started playing for everyone.
+/// A clip started playing for everyone. Anyone in the show steers it (decision 56).
 pub async fn mark_played(pool: &PgPool, id: Uuid, by: Uuid, clip: Uuid) -> Result<()> {
     let show = open_show(pool, id).await?;
-    host_only(&show, by)?;
     in_status(&show, &[ShowStatus::Live], "play clips")?;
+    if !is_participant(pool, id, by).await? {
+        return Err(ShowError::Forbidden("join the show first"));
+    }
     let mut tx = pool.begin().await?;
     // `released_hold`: this show took the clip's hold away, which `abandon` gives back.
     let changed = sqlx::query(
@@ -654,14 +702,15 @@ pub async fn react(
     emoji: &str,
     at_ms: i32,
 ) -> Result<()> {
-    let show = open_show(pool, id).await?;
-    in_status(&show, &[ShowStatus::Live], "react")?;
+    // What the tap says is checked first: it needs no database.
     if emoji != BANANA && !social::EMOJIS.contains(&emoji) {
         return Err(ShowError::Invalid("unsupported reaction".into()));
     }
     if at_ms < 0 {
         return Err(ShowError::Invalid("the moment can't be negative".into()));
     }
+    let show = open_show(pool, id).await?;
+    in_status(&show, &[ShowStatus::Live], "react")?;
     if !is_participant(pool, id, user).await? {
         return Err(ShowError::Forbidden("join the show first"));
     }
@@ -710,10 +759,10 @@ pub async fn react(
     Ok(())
 }
 
-/// A vote in the finale (decision 31): people in the show, for a played clip that isn't
-/// their own and isn't in the trash; fail votes only for clips marked with 🍌. Voting
-/// again changes the vote. A vote never lands after the show ended: the insert checks
-/// the finale is still on, and waits for an `end` that's counting.
+/// A vote in the finale (decision 31): people in the show, for a played clip that isn't in
+/// the trash, their own included (decision 56); fail votes only for clips marked with 🍌.
+/// Voting again changes the vote. A vote never lands after the show ended: the insert
+/// checks the finale is still on, and waits for an `end` that's counting.
 pub async fn vote(
     pool: &PgPool,
     id: Uuid,
@@ -726,20 +775,19 @@ pub async fn vote(
     if !is_participant(pool, id, voter).await? {
         return Err(ShowError::Forbidden("only people in the show vote"));
     }
-    let owner: Option<Uuid> = sqlx::query_scalar(
-        "SELECT c.owner_id FROM show_clips sc JOIN clips c ON c.id = sc.clip_id
-          WHERE sc.show_id = $1 AND sc.clip_id = $2 AND NOT sc.dropped
-            AND sc.played_at IS NOT NULL AND c.deleted_at IS NULL",
+    // Your own clip too: friends clip each other (decision 56).
+    let played: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT FROM show_clips sc JOIN clips c ON c.id = sc.clip_id
+             WHERE sc.show_id = $1 AND sc.clip_id = $2 AND NOT sc.dropped
+               AND sc.played_at IS NOT NULL AND c.deleted_at IS NULL)",
     )
     .bind(id)
     .bind(clip)
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
-    let owner = owner.ok_or_else(|| ShowError::Invalid("that clip wasn't played".into()))?;
-    if owner == voter {
-        return Err(ShowError::Invalid(
-            "you can't vote for your own clip".into(),
-        ));
+    if !played {
+        return Err(ShowError::Invalid("that clip wasn't played".into()));
     }
     if category == Category::Fail && !fail_contenders(pool, id).await?.contains(&clip) {
         return Err(ShowError::Invalid(
@@ -1118,13 +1166,19 @@ mod tests {
             [b, a, old, c]
         );
 
-        // Live: only the host starts and plays.
+        // Live: only the host starts; anyone in the show plays clips.
         assert!(matches!(
             start(&pool, show, kim).await,
             Err(ShowError::Forbidden(_))
         ));
         start(&pool, show, sam).await.unwrap();
-        for clip in [b, a, c] {
+        let outsider = user(&pool, "outsider").await;
+        assert!(matches!(
+            mark_played(&pool, show, outsider, b).await,
+            Err(ShowError::Forbidden(_))
+        ));
+        mark_played(&pool, show, kim, b).await.unwrap();
+        for clip in [a, c] {
             mark_played(&pool, show, sam, clip).await.unwrap();
         }
         // Reactions: 🍌 makes a fail contender; 🔥 also turns on kim's 🔥 on the clip.
@@ -1145,17 +1199,15 @@ mod tests {
         assert_eq!(reactions(&pool, show).await.unwrap().len(), 3);
         assert_eq!(fail_contenders(&pool, show).await.unwrap(), [a]);
 
-        // The finale: no voting before it, for your own clip, for an unplayed clip, or a
-        // fail vote for a clip nobody marked.
+        // The finale: no voting before it, for an unplayed clip, or a fail vote for a clip
+        // nobody marked. Your own clip is fine (friends clip each other), and voting
+        // again changes the vote.
         assert!(matches!(
             vote(&pool, show, kim, Category::Clip, a).await,
             Err(ShowError::Conflict(_))
         ));
         finale(&pool, show, sam).await.unwrap();
-        assert!(matches!(
-            vote(&pool, show, sam, Category::Clip, a).await,
-            Err(ShowError::Invalid(_))
-        ));
+        vote(&pool, show, kim, Category::Clip, b).await.unwrap();
         assert!(matches!(
             vote(&pool, show, kim, Category::Clip, old).await,
             Err(ShowError::Invalid(_))
@@ -1392,6 +1444,73 @@ mod tests {
         let show = create(&pool, sam).await.unwrap().id;
         add_clip(&pool, show, sam, x).await.unwrap();
         assert_eq!(ids(&lineup(&pool, show).await.unwrap(), false), [y, x]);
+    }
+
+    #[sqlx::test(migrator = "crate::db::MIGRATOR")]
+    async fn a_show_plays_at_most_ten_clips_and_the_rest_are_spares(pool: PgPool) {
+        let sam = user(&pool, "sam").await;
+        let mut clips = Vec::new();
+        for n in 0..12 {
+            clips.push(ready_clip(&pool, sam, &format!("Clip {n}"), "Nuke").await);
+        }
+        let show = create(&pool, sam).await.unwrap().id;
+        let rows = lineup(&pool, show).await.unwrap();
+        assert_eq!(ids(&rows, false), clips[..10]);
+        assert_eq!(ids(&rows, true), clips[10..]);
+        assert!(rows.iter().all(|r| r.spare == r.dropped));
+
+        // Full: nothing more goes in, by hand or by putting a spare back.
+        let late = ready_clip(&pool, sam, "Late", "Nuke").await;
+        let full = |r: Result<()>| matches!(r, Err(ShowError::Conflict(m)) if m.contains("10"));
+        assert!(full(add_clip(&pool, show, sam, late).await));
+        assert!(full(add_clip(&pool, show, sam, clips[10]).await));
+        assert!(matches!(
+            set_lineup(&pool, show, sam, &clips[..11]).await,
+            Err(ShowError::Invalid(_))
+        ));
+        // Already in: that's what it says, full or not.
+        assert!(matches!(
+            add_clip(&pool, show, sam, clips[0]).await,
+            Err(ShowError::Conflict(m)) if m.contains("already")
+        ));
+
+        // The host drops one and puts a spare back in its place; the other spare stays a
+        // spare, the dropped one is dropped.
+        let mut order = clips[1..10].to_vec();
+        set_lineup(&pool, show, sam, &order).await.unwrap();
+        add_clip(&pool, show, sam, clips[10]).await.unwrap();
+        order.push(clips[10]);
+        let rows = lineup(&pool, show).await.unwrap();
+        assert_eq!(ids(&rows, false), order);
+        let spare = |c: Uuid| rows.iter().find(|r| r.clip_id == c).unwrap().spare;
+        assert!(!spare(clips[0]) && spare(clips[11]) && !spare(clips[10]));
+
+        // Clips that turn up in the lobby are spares at Start when the lineup is full.
+        start(&pool, show, sam).await.unwrap();
+        let rows = lineup(&pool, show).await.unwrap();
+        assert!(
+            rows.iter()
+                .any(|r| r.clip_id == late && r.dropped && r.spare)
+        );
+        for c in &order {
+            mark_played(&pool, show, sam, *c).await.unwrap();
+        }
+        finale(&pool, show, sam).await.unwrap();
+        end(&pool, show, sam, TieBreak::default()).await.unwrap();
+
+        // Next time the spares and the dropped one come back.
+        assert_eq!(tonight(&pool).await.unwrap(), [clips[0], clips[11], late]);
+
+        // Only the host's drops count towards stopping a clip coming back: ten older clips
+        // fill the next show, and all three are spares in a second ended show.
+        let mut fill = Vec::new();
+        for n in 0..10 {
+            let c = ready_clip(&pool, sam, &format!("Fill {n}"), "Nuke").await;
+            aged(&pool, c, 1).await;
+            fill.push(c);
+        }
+        play_show(&pool, sam, &fill).await;
+        assert_eq!(tonight(&pool).await.unwrap(), [clips[0], clips[11], late]);
     }
 
     #[sqlx::test(migrator = "crate::db::MIGRATOR")]

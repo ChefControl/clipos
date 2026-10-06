@@ -20,6 +20,7 @@ import { type SyncStatus, targetMs } from "./sync";
 import { UpNext } from "./UpNext";
 import { usePlayback } from "./usePlayback";
 import type { ShowEvent, ShowLive } from "./useShowLive";
+import { Volume } from "./Volume";
 
 /** How far ahead the host's "play this now" starts it: time for everyone to fetch it. */
 const START_LEAD_MS = 1500;
@@ -37,13 +38,13 @@ const STATUS: Record<SyncStatus, [string, Tone]> = {
   catchingUp: ["Catching up", "amber"],
   starting: ["Starting…", "amber"],
   blocked: ["Click to join with sound", "amber"],
-  idle: ["Waiting for the host", "grey"],
+  idle: ["Waiting", "grey"],
 };
 
 // The show, live (canvas 2.2 the host's screen, 2.3 a friend's): the clip everyone's
-// watching in sync, whose clip it is, the controls (the host's: pause, jump, next; a
-// friend's: ask for it again; everyone's: React), reactions floating up the player, and
-// the side panel with what's next.
+// watching in sync, whose clip it is, the controls (everyone's since decision 56: pause,
+// jump, next, React; your own volume), reactions floating up the player, and the side
+// panel with what's next. The host's screen still moves the show on between clips.
 export function Stage({
   show,
   live,
@@ -148,24 +149,13 @@ export function Stage({
   }, [between, awaySince]);
 
   const { floats, add } = useFloats();
-  const [requests, setRequests] = useState<string[]>([]);
-  const [asked, setAsked] = useState(false);
   const [panel, setPanel] = useState(true);
-  // Replay requests are about the clip that's on.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the clip changes.
-  useEffect(() => {
-    setRequests([]);
-    setAsked(false);
-  }, [clipId]);
   events.current = (e) => {
     if (e.type === "reaction") {
       // Your own taps floated when you tapped.
       if (e.userId !== meId && e.clipId === clipId) add(e.emoji);
       // 🍌 makes the clip a fail contender.
       if (e.emoji === BANANA) queryClient.invalidateQueries({ queryKey: ["show", show.id] });
-    }
-    if (e.type === "replayRequest" && isHost && e.userId !== meId) {
-      setRequests((r) => (r.includes(e.userId) ? r : [...r, e.userId]));
     }
   };
 
@@ -200,11 +190,6 @@ export function Stage({
       onSuccess: () => setEnding(false),
       onError: (err) => toast(`Couldn't go to the finale: ${err.message}`, "danger"),
     });
-  const replay = () => {
-    send({ type: "seek", positionMs: 0 });
-    if (!state?.playing) send({ type: "play" });
-    setRequests([]);
-  };
   const fullScreen = useRef<HTMLDivElement>(null);
 
   const [status, tone]: [string, Tone] =
@@ -214,7 +199,7 @@ export function Stage({
         ? ["Reconnecting…", "amber"]
         : clipId && state && !state.playing
           ? ["Paused", "grey"]
-          : !clipId && isHost
+          : !clipId
             ? ["Nothing on yet", "grey"]
             : STATUS[playback.status];
   const position = entry ? lineup.indexOf(entry) + 1 : lineup.filter((l) => l.playedAt).length;
@@ -346,7 +331,7 @@ export function Stage({
             )}
             {!clipId && (
               <div className="absolute inset-0 grid place-items-center bg-black/50 p-6 text-center">
-                {isHost && upcoming[0] ? (
+                {upcoming[0] ? (
                   <Button
                     variant="primary"
                     size="lg"
@@ -358,11 +343,7 @@ export function Stage({
                 ) : (
                   <div className="flex flex-col items-center gap-3">
                     <Kip pose="asleep" className="h-28 w-28" />
-                    <p className="text-lg text-soft">
-                      {isHost
-                        ? "Nothing left in the lineup."
-                        : `Waiting for ${hostName} to put a clip on.`}
-                    </p>
+                    <p className="text-lg text-soft">Nothing left in the lineup.</p>
                   </div>
                 )}
               </div>
@@ -374,6 +355,7 @@ export function Stage({
                 </Button>
               </div>
             )}
+            <Volume video={playback.video} />
             <button
               type="button"
               aria-label="Full screen"
@@ -423,31 +405,29 @@ export function Stage({
                 </span>
                 <span className="text-[17px] text-soft">
                   {startsInMs == null
-                    ? `Held. It starts when ${isHost ? "you press Start now" : `${hostName} starts it`}.`
+                    ? "Held. It starts when someone presses Start now."
                     : `Everyone sees this. ${entry.clip.isMine ? "Your" : `${entry.clip.uploader.displayName}'s`} clip starts on its own when the count hits 0.`}
                 </span>
               </div>
-              {isHost && (
-                <div className="ml-auto flex items-center gap-3">
-                  {startsInMs != null && (
-                    <Button
-                      size="lg"
-                      className="frost h-[52px]"
-                      onClick={() => send({ type: "pause" })}
-                    >
-                      Hold
-                    </Button>
-                  )}
+              <div className="ml-auto flex items-center gap-3">
+                {startsInMs != null && (
                   <Button
-                    variant="primary"
                     size="lg"
-                    className="h-[52px] font-extrabold"
-                    onClick={() => send({ type: "play" })}
+                    className="frost h-[52px]"
+                    onClick={() => send({ type: "pause" })}
                   >
-                    Start now
+                    Hold
                   </Button>
-                </div>
-              )}
+                )}
+                <Button
+                  variant="primary"
+                  size="lg"
+                  className="h-[52px] font-extrabold"
+                  onClick={() => send({ type: "play" })}
+                >
+                  Start now
+                </Button>
+              </div>
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-4 px-1 pt-5">
@@ -475,76 +455,33 @@ export function Stage({
                 )}
               </div>
               <div className="ml-auto flex flex-wrap items-center justify-end gap-3.5">
-                {isHost && requests[0] && (
-                  <div
-                    role="status"
-                    className="glass flex items-center gap-3 rounded-full py-2 pr-2 pl-4 ring-[1.5px] ring-accent"
+                <div className="flex items-center gap-3.5" data-testid="controls">
+                  <RoundButton
+                    label="Back 10 s"
+                    disabled={!clipId}
+                    onClick={() =>
+                      send({ type: "seek", positionMs: Math.max(0, here() - JUMP_MS) })
+                    }
                   >
-                    <span className="font-bold">
-                      <bdi>{nameOf(requests[0])}</bdi> wants it again
-                      {requests.length > 1 && ` (+${requests.length - 1})`}
-                    </span>
-                    <Button size="sm" variant="primary" onClick={replay}>
-                      Replay
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setRequests([])}>
-                      Dismiss
-                    </Button>
-                  </div>
-                )}
-                {isHost ? (
-                  <div className="flex items-center gap-3.5" data-testid="host-controls">
-                    <RoundButton
-                      label="Back 10 s"
-                      disabled={!clipId}
-                      onClick={() =>
-                        send({ type: "seek", positionMs: Math.max(0, here() - JUMP_MS) })
-                      }
-                    >
-                      <JumpIcon back />
-                    </RoundButton>
-                    {state?.playing ? (
-                      <RoundButton
-                        label="Pause for everyone"
-                        onClick={() => send({ type: "pause" })}
+                    <JumpIcon back />
+                  </RoundButton>
+                  {state?.playing ? (
+                    <RoundButton label="Pause for everyone" onClick={() => send({ type: "pause" })}>
+                      <svg
+                        viewBox="0 0 24 24"
+                        className="h-5 w-5"
+                        fill="currentColor"
+                        aria-hidden="true"
                       >
-                        <svg
-                          viewBox="0 0 24 24"
-                          className="h-5 w-5"
-                          fill="currentColor"
-                          aria-hidden="true"
-                        >
-                          <rect x="6" y="5" width="4" height="14" rx="1" />
-                          <rect x="14" y="5" width="4" height="14" rx="1" />
-                        </svg>
-                      </RoundButton>
-                    ) : (
-                      <RoundButton
-                        label="Play for everyone"
-                        disabled={!clipId}
-                        onClick={() => send({ type: "play" })}
-                      >
-                        <svg
-                          viewBox="0 0 24 24"
-                          className="h-5 w-5"
-                          fill="currentColor"
-                          aria-hidden="true"
-                        >
-                          <path d="M7 4v16l13-8z" />
-                        </svg>
-                      </RoundButton>
-                    )}
-                    <RoundButton
-                      label="Forward 10 s"
-                      disabled={!clipId}
-                      onClick={() => send({ type: "seek", positionMs: here() + JUMP_MS })}
-                    >
-                      <JumpIcon />
+                        <rect x="6" y="5" width="4" height="14" rx="1" />
+                        <rect x="14" y="5" width="4" height="14" rx="1" />
+                      </svg>
                     </RoundButton>
+                  ) : (
                     <RoundButton
-                      label="Next clip"
-                      disabled={!clipId || !nextId}
-                      onClick={() => nextId && playNow(nextId)}
+                      label="Play for everyone"
+                      disabled={!clipId}
+                      onClick={() => send({ type: "play" })}
                     >
                       <svg
                         viewBox="0 0 24 24"
@@ -552,36 +489,32 @@ export function Stage({
                         fill="currentColor"
                         aria-hidden="true"
                       >
-                        <path d="M5 4v16l11-8zM17 4h2.5v16H17z" />
+                        <path d="M7 4v16l13-8z" />
                       </svg>
                     </RoundButton>
-                  </div>
-                ) : (
+                  )}
                   <RoundButton
-                    label="Ask for it again"
-                    disabled={!clipId || asked}
-                    onClick={() => {
-                      send({ type: "replayRequest" });
-                      setAsked(true);
-                      toast(`Asked ${hostName} to play it again.`);
-                    }}
-                    className="bg-accent/12 ring-[1.5px] ring-accent"
+                    label="Forward 10 s"
+                    disabled={!clipId}
+                    onClick={() => send({ type: "seek", positionMs: here() + JUMP_MS })}
+                  >
+                    <JumpIcon />
+                  </RoundButton>
+                  <RoundButton
+                    label="Next clip"
+                    disabled={!clipId || !nextId}
+                    onClick={() => nextId && playNow(nextId)}
                   >
                     <svg
                       viewBox="0 0 24 24"
-                      className="h-5 w-5 text-accent"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
+                      className="h-5 w-5"
+                      fill="currentColor"
                       aria-hidden="true"
                     >
-                      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
-                      <path d="M3 3v5h5" />
+                      <path d="M5 4v16l11-8zM17 4h2.5v16H17z" />
                     </svg>
                   </RoundButton>
-                )}
+                </div>
                 <ReactButton
                   onReact={react}
                   failMarked={failMarked}
@@ -600,7 +533,7 @@ export function Stage({
             remainingMs={
               clipId && !between && durationMs != null ? Math.max(0, durationMs - positionMs) : null
             }
-            onPlay={isHost ? playNow : undefined}
+            onPlay={playNow}
             onHide={() => setPanel(false)}
           />
         )}

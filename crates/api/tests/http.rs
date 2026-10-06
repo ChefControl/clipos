@@ -2232,9 +2232,9 @@ async fn a_show_from_lobby_to_winners(pool: PgPool) {
 
     let vote = |cat: &str| format!("/api/shows/{id}/votes/{cat}");
     let pick = |clip: &str| Some(json!({ "clipId": clip }));
-    // Not your own clip; no fail vote for a clip nobody marked.
-    let (status, _) = call("PUT", vote("clip"), sam.clone(), pick(&a)).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // Your own clip too (voting again changes it); no fail vote for a clip nobody marked.
+    let (status, body) = call("PUT", vote("clip"), sam.clone(), pick(&a)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _) = call("PUT", vote("fail"), sam.clone(), pick(&b)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, body) = call("PUT", vote("clip"), sam.clone(), pick(&b)).await;
@@ -4054,17 +4054,17 @@ async fn the_live_room_keeps_everyone_on_the_hosts_clip(pool: PgPool) {
     assert!(json(&body)["lineup"][0]["playedAt"].is_string());
     assert!(!held().await);
 
-    // Only the host steers.
+    // Anyone in the show steers, not only the host.
+    ws_next(&mut host, "state").await;
     ws_send(&mut friend, json!({ "type": "pause" })).await;
-    assert_eq!(
-        ws_next(&mut friend, "error").await["message"],
-        "only the host can do that"
-    );
+    for ws in [&mut host, &mut friend] {
+        assert_eq!(ws_next(ws, "state").await["state"]["playing"], false);
+    }
     ws_send(&mut host, json!({ "type": "seek", "positionMs": 1500 })).await;
     let state = ws_next(&mut friend, "state").await["state"].clone();
     assert_eq!(state["positionMs"], 1500.0);
 
-    // Clock sync, reactions and replay requests.
+    // Clock sync and reactions.
     ws_send(
         &mut friend,
         json!({ "type": "ping", "clientMs": 42.5, "rttMs": 30 }),
@@ -4083,8 +4083,6 @@ async fn the_live_room_keeps_everyone_on_the_hosts_clip(pool: PgPool) {
         (reaction["emoji"].as_str(), reaction["atMs"].as_i64()),
         (Some("🍌"), Some(1200))
     );
-    ws_send(&mut friend, json!({ "type": "replayRequest" })).await;
-    ws_next(&mut host, "replayRequest").await;
 
     // REST changes reach the room; the host can't be taken over while connected.
     send(
@@ -4107,7 +4105,7 @@ async fn the_live_room_keeps_everyone_on_the_hosts_clip(pool: PgPool) {
     let (_, welcome) = ws_join(addr, &show, &kim).await;
     assert_eq!(welcome["state"]["clipId"], json!(a));
     assert_eq!(welcome["state"]["positionMs"], 1500.0);
-    assert_eq!(welcome["state"]["seq"], 3);
+    assert_eq!(welcome["state"]["seq"], 4);
 }
 
 #[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
@@ -4359,8 +4357,13 @@ async fn the_live_room_refuses_oversized_messages(pool: PgPool) {
     let addr = listen(&app).await;
     let (mut host, _) = ws_join(addr, &show, &admin).await;
     let (mut friend, _) = ws_join(addr, &show, &kim).await;
+    ws_drain(&mut host, 100).await;
     let huge = "x".repeat(20 * 1024);
-    ws_send(&mut friend, json!({ "type": "replayRequest", "pad": huge })).await;
+    ws_send(
+        &mut friend,
+        json!({ "type": "ready", "ready": true, "pad": huge }),
+    )
+    .await;
     // The connection ends, and the message never reaches anyone.
     let ended = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
@@ -4384,7 +4387,7 @@ async fn the_live_room_refuses_oversized_messages(pool: PgPool) {
         ws_drain(&mut host, 200)
             .await
             .iter()
-            .all(|m| m["type"] != "replayRequest")
+            .all(|m| m["type"] != "showChanged")
     );
 }
 
@@ -4435,23 +4438,25 @@ async fn the_live_room_limits_how_fast_friends_send(pool: PgPool) {
     let (mut friend, _) = ws_join(addr, &show, &kim).await;
     ws_drain(&mut host, 100).await;
 
+    // A tap with an unknown emoji is refused before anything is read or written, so each
+    // one that gets through is a quick "unsupported reaction".
+    let tap = json!({ "type": "react", "clipId": uuid::Uuid::nil(), "emoji": "🍕", "atMs": 0 });
     for _ in 0..40 {
-        ws_send(&mut friend, json!({ "type": "replayRequest" })).await;
+        ws_send(&mut friend, tap.clone()).await;
     }
     // Pings aren't limited.
     ws_send(&mut friend, json!({ "type": "ping", "clientMs": 1 })).await;
     let seen = ws_drain(&mut friend, 500).await;
     assert!(seen.iter().any(|m| m["type"] == "pong"));
+    let said = |what: &str| {
+        seen.iter()
+            .filter(|m| m["type"] == "error" && m["message"] == what)
+            .count()
+    };
     // One "slow down", however many were dropped.
-    let errors: Vec<&Value> = seen.iter().filter(|m| m["type"] == "error").collect();
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    assert_eq!(errors[0]["message"], "slow down");
+    assert_eq!(said("slow down"), 1, "{seen:?}");
     // The burst got through, and not much more.
-    let passed = ws_drain(&mut host, 300)
-        .await
-        .iter()
-        .filter(|m| m["type"] == "replayRequest")
-        .count();
+    let passed = said("unsupported reaction");
     assert!((20..=22).contains(&passed), "{passed} got through");
 }
 
@@ -4805,10 +4810,11 @@ async fn a_play_that_cant_be_counted_doesnt_start(pool: PgPool) {
     ws_send(&mut host, json!({ "type": "load", "clipId": a })).await;
     let loaded = ws_next(&mut friend, "state").await["state"].clone();
 
-    // The stored show moved to another host behind the hub's back, so counting fails.
+    // The host left the stored show behind the hub's back, so counting fails.
     sqlx::query(
-        "UPDATE shows SET host_id = (SELECT id FROM users WHERE email = 'kim@gmail.com')
-          WHERE id = $1::uuid",
+        "DELETE FROM show_participants
+          WHERE show_id = $1::uuid
+            AND user_id = (SELECT id FROM users WHERE email = 'admin@gmail.com')",
     )
     .bind(&show)
     .execute(&pool)
@@ -5161,9 +5167,8 @@ async fn the_live_room_ignores_what_it_doesnt_understand(pool: PgPool) {
     assert_eq!(presence["presence"]["online"].as_array().unwrap().len(), 1);
 }
 
-/// A friend who tries to steer, taps a reaction on a clip that hasn't played, or gets
-/// ready for a show that has ended behind the room's back is told why, and nothing goes
-/// out to anyone.
+/// A friend who taps a reaction on a clip that hasn't played, or gets ready for a show
+/// that has ended behind the room's back, is told why, and nothing goes out to anyone.
 #[sqlx::test(migrator = "clipos_core::db::MIGRATOR")]
 async fn the_live_room_says_why_a_tap_didnt_count(pool: PgPool) {
     let admin = admin_token(&pool).await;
@@ -5177,16 +5182,6 @@ async fn the_live_room_says_why_a_tap_didnt_count(pool: PgPool) {
     let (mut friend, _) = ws_join(addr, &show, &kim).await;
     ws_drain(&mut host, 100).await;
 
-    for msg in [
-        json!({ "type": "load", "clipId": a }),
-        json!({ "type": "play" }),
-    ] {
-        ws_send(&mut friend, msg).await;
-        assert_eq!(
-            ws_next(&mut friend, "error").await["message"],
-            "only the host can do that"
-        );
-    }
     let tap = json!({ "type": "react", "clipId": a, "emoji": "🔥", "atMs": 0 });
     ws_send(&mut friend, tap).await;
     assert_eq!(
@@ -5532,8 +5527,8 @@ async fn a_whole_show_over_the_live_room(pool: PgPool) {
         let (who, body) = (who.to_owned(), json!({ "clipId": clip }));
         async move { send(app, "PUT", &path, Some(&who), Some(body), &[]).await.0 }
     };
-    // Not for your own clip, and fails only for a clip with a 🍌.
-    assert_eq!(vote("clip", &sam, &a).await, StatusCode::BAD_REQUEST);
+    // Your own clip too (voting again changes it), and fails only for a clip with a 🍌.
+    assert_eq!(vote("clip", &sam, &a).await, StatusCode::OK);
     assert_eq!(vote("clip", &sam, &b).await, StatusCode::OK);
     assert_eq!(vote("clip", &kim, &a).await, StatusCode::OK);
     assert_eq!(vote("clip", &lee, &a).await, StatusCode::OK);

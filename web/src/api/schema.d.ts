@@ -479,7 +479,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Anyone in the show adds a clip to the end of the queue. */
+        /** Anyone in the show adds a clip to the end of the queue, up to 10 clips. */
         post: operations["add_clip"];
         delete?: never;
         options?: never;
@@ -496,7 +496,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** The host: this clip started playing for everyone. */
+        /** Anyone in the show: this clip started playing for everyone. */
         post: operations["mark_played"];
         delete?: never;
         options?: never;
@@ -976,12 +976,14 @@ export interface components {
              */
             addedBy?: string | null;
             clip: components["schemas"]["ClipView"];
-            /** @description Left out by the host; stays for the next show. */
+            /** @description Left out by the host, or a spare; stays for the next show. */
             dropped: boolean;
             /** Format: date-time */
             playedAt?: string | null;
             /** Format: int32 */
             position: number;
+            /** @description Left out because the show was full (10 clips), not by the host (decision 56). */
+            spare: boolean;
         };
         LostTo: {
             /** Format: uuid */
@@ -1133,8 +1135,8 @@ export interface components {
         Role: "admin" | "member";
         SetLineup: {
             /**
-             * @description The clips still to play, in order. Ones left out are dropped (they stay for the
-             *     next show).
+             * @description The clips still to play, in order, at most 10 with the played ones. Ones left out
+             *     are dropped (they stay for the next show).
              */
             clipIds: string[];
         };
@@ -2833,7 +2835,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Already in the lineup, or not in the lobby or live */
+            /** @description Already in the lineup, the show has 10 clips, or not in the lobby or live */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2885,7 +2887,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
-            /** @description Not the host */
+            /** @description Not in the show */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3120,7 +3122,7 @@ export interface operations {
                     "application/json": components["schemas"]["ShowView"];
                 };
             };
-            /** @description A clip that isn't waiting in the lineup, or one twice */
+            /** @description A clip that isn't waiting in the lineup, one twice, or more than 10 clips */
             400: {
                 headers: {
                     [name: string]: unknown;
