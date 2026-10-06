@@ -1,13 +1,19 @@
+import { useEffect } from "react";
 import { Kip } from "../kip/Kip";
 import { useTitle } from "../lib/useTitle";
 import { Backdrop } from "../ui/Backdrop";
-import { Credit } from "../ui/Credit";
+import { COPYRIGHT_ID, Credit } from "../ui/Credit";
 import { PublicHeader } from "../ui/Wordmark";
 
 /** Public privacy policy (linked from the Google consent screen). Rendered without
  *  config or sign-in, see main.tsx. */
 export function Privacy() {
   useTitle("Privacy");
+  // The page renders after load, so the browser's own jump to a #section can miss it.
+  useEffect(() => {
+    const id = window.location.hash.slice(1);
+    if (id) document.getElementById(id)?.scrollIntoView();
+  }, []);
   return (
     <div className="flex min-h-full flex-col">
       <Backdrop />
@@ -66,6 +72,16 @@ export function Privacy() {
             <p>
               Deleted clips can be restored for 7 days, then they are removed for good. To have your
               account and everything you uploaded removed, ask the admin who invited you.
+            </p>
+          </section>
+
+          <section id={COPYRIGHT_ID} className="scroll-mt-6 space-y-2">
+            <h2>Copyright and trademarks</h2>
+            <p>
+              clipos is a private fan project for a group of friends. It isn't affiliated with or
+              endorsed by Valve Corporation. Counter-Strike 2, CS2 and the weapon and killfeed icons
+              are trademarks and artwork of Valve Corporation, all rights reserved. Clips belong to
+              the players who recorded them.
             </p>
           </section>
         </div>

@@ -35,7 +35,7 @@ test("the top bar: Kip, Archive, Upload, your avatar; Admin is on your profile",
   await expect(nav.getByRole("link", { name: "Archive" })).toHaveAttribute("aria-current", "page");
   await expect(nav.getByRole("link", { name: "Upload" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Admin" })).toHaveCount(0);
-  await expect(page.getByText("isn't affiliated with or endorsed by Valve")).toBeVisible();
+  await expect(page.getByText("Not affiliated with Valve.")).toBeVisible();
   await page.getByRole("link", { name: "Your profile" }).click();
   await page.getByRole("link", { name: "Invites and members" }).click();
   await expect(page.getByRole("heading", { name: "Admin" })).toBeVisible();
