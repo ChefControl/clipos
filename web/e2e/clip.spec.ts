@@ -326,6 +326,21 @@ test("player: the mute and speed buttons", async ({ page }) => {
   await expect.poll(() => media(page).then((m) => m.rate)).toBe(2);
 });
 
+test("player: hovering mute slides the volume out, leaving slides it back", async ({ page }) => {
+  await openPlayer(page);
+  const range = page.locator("media-volume-range");
+  const width = () => range.evaluate((el) => el.getBoundingClientRect().width);
+  // Over the video, the controls show; the volume stays folded.
+  await page.locator("video").hover();
+  await expect.poll(width).toBe(0);
+  await page.getByRole("button", { name: "mute", exact: true }).hover();
+  await expect.poll(width).toBeGreaterThan(80);
+  await page.locator("video").hover();
+  await expect.poll(width).toBe(0);
+  // The mute button stays.
+  await expect(page.getByRole("button", { name: "mute", exact: true })).toBeVisible();
+});
+
 test("theater mode gives the player the width, the killfeed goes under it", async ({ page }) => {
   await openPlayer(page);
   const theater = page.getByRole("button", { name: "Theater mode (T)" });

@@ -9,6 +9,7 @@ import {
   MediaPreviewTimeDisplay,
   MediaTimeDisplay,
   MediaTimeRange,
+  MediaVolumeRange,
 } from "media-chrome/react";
 import {
   type ComponentRef,
@@ -191,7 +192,9 @@ export function Player({
         return;
       }
       // A focused button or slider handles Space, Enter and the arrows itself.
-      const onControl = target?.closest("button, a, media-time-range, [role=slider]");
+      const onControl = target?.closest(
+        "button, a, media-time-range, media-volume-range, [role=slider]",
+      );
       if (onControl && [" ", "enter", "arrowleft", "arrowright"].includes(e.key.toLowerCase())) {
         return;
       }
@@ -343,7 +346,15 @@ export function Player({
                   </>,
                 )}
               </ControlButton>
-              <MediaMuteButton />
+              {/* Hovering the mute button (or tabbing to it) slides the volume out; leaving
+                  slides it back. */}
+              <div className="group/volume flex items-center">
+                <MediaMuteButton />
+                <MediaVolumeRange
+                  aria-label="Volume"
+                  className="w-0 overflow-hidden opacity-0 transition-[width,opacity] duration-200 ease-out group-has-[:focus-visible]/volume:w-24 group-has-[:focus-visible]/volume:opacity-100 group-hover/volume:w-24 group-hover/volume:opacity-100 motion-reduce:transition-none"
+                />
+              </div>
               <MediaTimeDisplay showDuration />
               <span className="grow" />
               <MediaPlaybackRateButton rates={[...SPEEDS]} />

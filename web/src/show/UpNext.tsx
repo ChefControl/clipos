@@ -5,11 +5,15 @@ import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
 import { Panel } from "../ui/Panel";
 import { useToast } from "../ui/Toast";
-import { type LineupEntry, useShowActions } from "./hooks";
+import { type LineupEntry, MAX_CLIPS, useShowActions } from "./hooks";
+
+/** Suggestions of each kind in Add a clip, before you search. */
+const SUGGESTED = 4;
 
 // The show's side panel (canvas 2.2, 2.3): what's still to come, the next one counting
-// down, and Add a clip, which anyone in the show can do (to the end of the queue). The
-// host can put any of them on straight away. It folds away for a bigger player.
+// down, and Add a clip, which anyone in the show can do (to the end of the queue, up to
+// 10 clips). Anyone can put any of them on straight away (decision 57). It folds away
+// for a bigger player.
 export function UpNext({
   showId,
   upcoming,
@@ -24,11 +28,12 @@ export function UpNext({
   lineupIds: string[];
   /** Left of the clip that's on, for the next one's "in 0:16"; null when nothing's on. */
   remainingMs: number | null;
-  /** The host's: put this one on now. */
-  onPlay?: (clipId: string) => void;
+  /** Put this one on now. */
+  onPlay: (clipId: string) => void;
   onHide: () => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const full = lineupIds.length >= MAX_CLIPS;
   const total = upcoming.reduce((sum, l) => sum + (l.clip.durationMs ?? 0), 0);
   return (
     <Panel
@@ -42,7 +47,12 @@ export function UpNext({
           Up next · {upcoming.length} {upcoming.length === 1 ? "clip" : "clips"} ·{" "}
           {formatDuration(total)}
         </span>
-        <PanelButton label="Add a clip" onClick={() => setAdding(true)} className="ml-auto">
+        <PanelButton
+          label={full ? `A show has at most ${MAX_CLIPS} clips` : "Add a clip"}
+          disabled={full}
+          onClick={() => setAdding(true)}
+          className="ml-auto"
+        >
           <path d="M12 5v14M5 12h14" />
         </PanelButton>
         <PanelButton label="Hide the side panel" onClick={onHide}>
@@ -52,7 +62,7 @@ export function UpNext({
       <ol className="flex min-h-0 flex-col overflow-y-auto" data-testid="up-next">
         {upcoming.length === 0 && (
           <li className="py-2 text-[15px] text-muted">
-            Nothing left. Add one, or it's the finale.
+            {full ? "Nothing left. It's the finale." : "Nothing left. Add one, or it's the finale."}
           </li>
         )}
         {upcoming.map((l, i) => {
@@ -81,19 +91,15 @@ export function UpNext({
           );
           return (
             <li key={l.clip.id} className={i === 0 ? "" : "opacity-60"}>
-              {onPlay ? (
-                <button
-                  type="button"
-                  aria-label={`Play ${l.clip.title} now`}
-                  title="Play it now"
-                  onClick={() => onPlay(l.clip.id)}
-                  className="flex w-full items-center gap-3.5 rounded-xl py-2 text-text hover:bg-white/6"
-                >
-                  {row}
-                </button>
-              ) : (
-                <div className="flex items-center gap-3.5 py-2">{row}</div>
-              )}
+              <button
+                type="button"
+                aria-label={`Play ${l.clip.title} now`}
+                title="Play it now"
+                onClick={() => onPlay(l.clip.id)}
+                className="flex w-full items-center gap-3.5 rounded-xl py-2 text-text hover:bg-white/6"
+              >
+                {row}
+              </button>
             </li>
           );
         })}
@@ -115,11 +121,13 @@ export function UpNext({
 function PanelButton({
   label,
   onClick,
+  disabled,
   className = "",
   children,
 }: {
   label: string;
   onClick: () => void;
+  disabled?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
@@ -129,7 +137,8 @@ function PanelButton({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className={`squircle grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white/8 text-text hover:bg-white/15 ${className}`}
+      disabled={disabled}
+      className={`squircle grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white/8 text-text hover:bg-white/15 disabled:opacity-40 disabled:hover:bg-white/8 ${className}`}
     >
       <svg
         viewBox="0 0 24 24"
@@ -147,7 +156,8 @@ function PanelButton({
   );
 }
 
-/** Add a clip from the archive to the end of the show's queue. */
+/** Add a clip from the archive to the end of the show's queue. Before you search, it
+ *  suggests the crowd's favourites (the most reactions) and the newest uploads. */
 function AddClip({
   open,
   onClose,
@@ -160,12 +170,32 @@ function AddClip({
   lineupIds: string[];
 }) {
   const [q, setQ] = useState("");
+  const searching = q.trim() !== "";
   const clips = useClips({ q: q.trim() || undefined });
+  const top = useClips({ sort: "top" });
   const { addClip } = useShowActions(showId);
   const toast = useToast();
-  const found: Clip[] = (clips.data?.pages.flatMap((p) => p.clips) ?? [])
-    .filter((c) => c.status === "ready" && !lineupIds.includes(c.id))
-    .slice(0, 12);
+  const addable = (list: typeof clips) =>
+    (list.data?.pages.flatMap((p) => p.clips) ?? []).filter(
+      (c) => c.status === "ready" && !lineupIds.includes(c.id),
+    );
+  const found = addable(clips).slice(0, 12);
+  const favourites = addable(top)
+    .filter((c) => c.reactionCount > 0)
+    .slice(0, SUGGESTED);
+  const recent = addable(clips)
+    .filter((c) => !favourites.some((f) => f.id === c.id))
+    .slice(0, SUGGESTED);
+  const add = (c: Clip) =>
+    addClip.mutate(c.id, {
+      onSuccess: () => {
+        toast(`${c.title} is at the end of the queue.`);
+        onClose();
+      },
+      onError: (err) => toast(`Couldn't add it: ${err.message}`, "danger"),
+    });
+  const rows = (list: Clip[]) =>
+    list.map((c) => <ClipRow key={c.id} clip={c} busy={addClip.isPending} onAdd={add} />);
   return (
     <Modal open={open} onClose={onClose} title="Add a clip to the show">
       <label className="flex flex-col gap-1.5">
@@ -178,45 +208,75 @@ function AddClip({
           className="input"
         />
       </label>
-      <ul className="-mx-2 flex max-h-[50vh] flex-col overflow-y-auto">
-        {clips.isSuccess && found.length === 0 && (
-          <li className="px-2 py-3 text-soft">No clips to add{q ? " for that search" : ""}.</li>
+      <div className="-mx-2 flex max-h-[50vh] flex-col overflow-y-auto">
+        {searching ? (
+          <ul className="flex flex-col">
+            {clips.isSuccess && found.length === 0 && (
+              <li className="px-2 py-3 text-soft">No clips to add for that search.</li>
+            )}
+            {rows(found)}
+          </ul>
+        ) : (
+          <>
+            {clips.isSuccess && top.isSuccess && favourites.length + recent.length === 0 && (
+              <p className="px-2 py-3 text-soft">No clips to add.</p>
+            )}
+            {favourites.length > 0 && (
+              <section aria-label="Crowd favourites" className="flex flex-col">
+                <h3 className="px-2 pt-1 pb-1 font-mono text-[11px] text-muted">
+                  Crowd favourites
+                </h3>
+                <ul className="flex flex-col">{rows(favourites)}</ul>
+              </section>
+            )}
+            {recent.length > 0 && (
+              <section aria-label="Recent uploads" className="flex flex-col">
+                <h3 className="px-2 pt-3 pb-1 font-mono text-[11px] text-muted">Recent uploads</h3>
+                <ul className="flex flex-col">{rows(recent)}</ul>
+              </section>
+            )}
+          </>
         )}
-        {found.map((c) => (
-          <li key={c.id} className="flex items-center gap-3 rounded-xl px-2 py-2 hover:bg-white/5">
-            <span
-              className="squircle aspect-video w-24 shrink-0 rounded-[11px] bg-surface bg-cover bg-center"
-              style={{ backgroundImage: c.posterUrl ? `url(${c.posterUrl})` : undefined }}
-            />
-            <span className="flex min-w-0 flex-col">
-              <span dir="auto" className="truncate font-bold">
-                {c.title}
-              </span>
-              <span className="truncate text-[13px] text-muted">
-                <bdi>{c.uploader.displayName}</bdi>
-                {c.durationMs != null && ` · ${formatDuration(c.durationMs)}`}
-              </span>
-            </span>
-            <Button
-              size="sm"
-              className="ml-auto"
-              disabled={addClip.isPending}
-              aria-label={`Add ${c.title}`}
-              onClick={() =>
-                addClip.mutate(c.id, {
-                  onSuccess: () => {
-                    toast(`${c.title} is at the end of the queue.`);
-                    onClose();
-                  },
-                  onError: (err) => toast(`Couldn't add it: ${err.message}`, "danger"),
-                })
-              }
-            >
-              Add
-            </Button>
-          </li>
-        ))}
-      </ul>
+      </div>
     </Modal>
+  );
+}
+
+function ClipRow({
+  clip: c,
+  busy,
+  onAdd,
+}: {
+  clip: Clip;
+  busy: boolean;
+  onAdd: (clip: Clip) => void;
+}) {
+  return (
+    <li className="flex items-center gap-3 rounded-xl px-2 py-2 hover:bg-white/5">
+      <span
+        className="squircle aspect-video w-24 shrink-0 rounded-[11px] bg-surface bg-cover bg-center"
+        style={{ backgroundImage: c.posterUrl ? `url(${c.posterUrl})` : undefined }}
+      />
+      <span className="flex min-w-0 flex-col">
+        <span dir="auto" className="truncate font-bold">
+          {c.title}
+        </span>
+        <span className="truncate text-[13px] text-muted">
+          <bdi>{c.uploader.displayName}</bdi>
+          {c.durationMs != null && ` · ${formatDuration(c.durationMs)}`}
+          {c.reactionCount > 0 &&
+            ` · ${c.reactionCount} ${c.reactionCount === 1 ? "reaction" : "reactions"}`}
+        </span>
+      </span>
+      <Button
+        size="sm"
+        className="ml-auto"
+        disabled={busy}
+        aria-label={`Add ${c.title}`}
+        onClick={() => onAdd(c)}
+      >
+        Add
+      </Button>
+    </li>
   );
 }

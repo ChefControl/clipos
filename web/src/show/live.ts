@@ -30,7 +30,6 @@ export type ServerMsg =
   | { type: "pong"; clientMs: number; serverMs: number }
   | { type: "presence"; presence: Presence }
   | { type: "reaction"; userId: string; clipId: string; emoji: string; atMs: number }
-  | { type: "replayRequest"; userId: string }
   | { type: "showChanged" }
   | { type: "showOver" }
   | { type: "error"; message: string };
@@ -42,7 +41,6 @@ export type ClientMsg =
   | { type: "seek"; positionMs: number }
   | { type: "react"; clipId: string; emoji: string; atMs: number }
   | { type: "ready"; ready: boolean }
-  | { type: "replayRequest" }
   | { type: "takeOver" };
 
 /** `closed`: for good (the show is over, or the server won't let this browser in). */

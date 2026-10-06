@@ -19,9 +19,9 @@ const LABEL: Record<Category, string> = {
 const COUNT_AFTER_MS = 1_000;
 
 // The finale (canvas 2.5): fail of the night, then clip of the night, 20 s each, on every
-// screen at once (the windows come from the server). Only people in the show vote, not
-// for their own clip; until it's over nobody sees the counts, only who has voted
-// (decision 43). When the vote closes the host's screen ends the show, and a tie is the
+// screen at once (the windows come from the server). Only people in the show vote, their
+// own clips included, since friends clip each other (decision 57); until it's over nobody
+// sees the counts, only who has voted (decision 43). When the vote closes the host's screen ends the show, and a tie is the
 // host's to break.
 export function Finale({ show, live, meId }: { show: Show; live: ShowLive; meId: string }) {
   const hostId = live.presence?.hostId ?? show.host.id;
@@ -114,7 +114,6 @@ function Vote({
   const fail = category === "fail";
   const seconds = Math.ceil(leftMs / 1000);
   const ring = fail ? "var(--color-violet)" : "var(--color-accent)";
-  const theirs = (c: Clip) => c.isMine;
   return (
     <section className="relative mt-4 flex flex-1 flex-col gap-7" aria-label={LABEL[category]}>
       <div className="flex items-end gap-5">
@@ -144,14 +143,14 @@ function Vote({
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-6">
           {clips.map((c) => {
-            const own = theirs(c);
+            const own = c.isMine;
             const picked = mine === c.id;
             return (
               <button
                 key={c.id}
                 type="button"
                 aria-pressed={picked}
-                disabled={own || vote.isPending}
+                disabled={vote.isPending}
                 onClick={() =>
                   vote.mutate(
                     { category, clipId: c.id },
@@ -184,9 +183,7 @@ function Vote({
                         ? fail
                           ? "bg-violet"
                           : "bg-accent"
-                        : own
-                          ? ""
-                          : "ring-2 ring-white/30 ring-inset"
+                        : "ring-2 ring-white/30 ring-inset"
                     }`}
                   >
                     {picked && (
@@ -206,7 +203,7 @@ function Vote({
                   </span>
                 </span>
                 <span className="px-2 text-[13px] text-muted">
-                  {own ? "Your clip" : picked ? "Your vote" : "Click to vote"}
+                  {picked ? "Your vote" : own ? "Your clip · click to vote" : "Click to vote"}
                 </span>
               </button>
             );
