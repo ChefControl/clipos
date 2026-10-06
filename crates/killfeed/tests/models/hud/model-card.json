@@ -1,0 +1,17 @@
+{
+  "name": "hud",
+  "version": "test",
+  "classes": [
+    "radar",
+    "killfeed_row",
+    "money"
+  ],
+  "files": {
+    "model.onnx": {
+      "sha256": "d336c6f7d4ce33c4f2352afea22dc42bba25d569a217a6a115c4f6606eba0540"
+    },
+    "classes.json": {
+      "sha256": "60ace2a81636bd0f36f1cdb20f65856356b021b12889ad32fc7134c21ae80c7c"
+    }
+  }
+}
