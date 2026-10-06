@@ -64,6 +64,23 @@ body {
   border: 1px solid rgb(255 255 255 / 0.07);
 }
 
+/* The app's top bar: a soft frost over the page whose bottom edge melts away instead of
+   ending in a line. The frost sits behind the bar's contents and runs a little past it. */
+@utility topbar {
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 -20px;
+    z-index: -1;
+    background: rgb(14 14 16 / 0.6);
+    /* Unprefixed only: with both, the build's minifier keeps just the -webkit- one, which
+       Chrome ignores. It adds the prefix itself. */
+    backdrop-filter: blur(18px) saturate(120%);
+    mask-image: linear-gradient(#000 70%, transparent);
+    pointer-events: none;
+  }
+}
+
 /* A lighter frost for small chips over video or posters. */
 @utility frost {
   background: rgb(20 21 24 / 0.55);
