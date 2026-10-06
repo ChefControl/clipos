@@ -176,7 +176,7 @@ pub enum ClientMsg {
     },
     /// Put a clip on, paused at 0, or playing from server time `start_at` (at most 5 s
     /// ahead; sooner than the lead play needs is moved to then). Anyone in the show steers
-    /// (decision 56).
+    /// (decision 57).
     Load {
         clip_id: Uuid,
         start_at: Option<f64>,
@@ -1020,7 +1020,7 @@ fn internal(e: impl std::fmt::Display) -> Option<ServerMsg> {
     error("something went wrong")
 }
 
-/// A turn to change the live state, or why not: anyone in the room steers (decision 56;
+/// A turn to change the live state, or why not: anyone in the room steers (decision 57;
 /// connecting joins the show), but only while the show is live (not in the lobby or the
 /// finale).
 ///

@@ -51,7 +51,7 @@ export function Tonight() {
 }
 
 /** No show on yet: what the next one would play, and Host. A show plays the first 10;
- *  the rest wait for the one after (decision 56). */
+ *  the rest wait for the one after (decision 57). */
 function NextShow({ clips }: { clips: Clip[] }) {
   const create = useCreateShow();
   const later = clips.slice(MAX_CLIPS);

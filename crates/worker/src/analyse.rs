@@ -1,17 +1,21 @@
 //! `analyse` job: reads a CS2 clip's killfeed (phase 8, shadow mode).
 //!
-//! Samples the original at 1 fps, cuts the killfeed corner, finds the rows (row-finder
-//! model), reads their icons (icon model) and whose they are (red outline), follows each
-//! row across frames, and stores the kills and the recording player's summary in
-//! `analysis_results`. Nothing is turned into tags yet.
+//! Samples the original at 1 fps, finds the killfeed rows in each whole frame (the HUD
+//! locator), reads their icons (icon model) and whose they are (red outline or fill) in
+//! the killfeed corner, follows each row across frames, and stores the kills and the
+//! recording player's summary in `analysis_results`. Nothing is turned into tags yet.
 //!
-//! The models come from the `models` container (`<name>/<version>/`), are checked against
-//! the SHA-256 in their `model-card.json`, and are kept in a local cache between jobs.
+//! Each model (`<name>/<version>/`) is taken from the worker image when it carries that
+//! version (`baked_dir`, see deploy/worker.Dockerfile), and otherwise from the `models`
+//! container, kept in a local cache between jobs. Either way its files are checked
+//! against the SHA-256 in its `model-card.json`.
 
 use std::{
+    collections::BTreeSet,
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -21,7 +25,7 @@ use clipos_core::{
     clips::{self, ClipStatus},
     storage::Container,
 };
-use clipos_killfeed::{Analyzer, IconReader, Kill, RowFinder, SAMPLE_FPS, crop_box, summarise};
+use clipos_killfeed::{Analyzer, HudLocator, IconReader, Kill, SAMPLE_FPS, summarise};
 use image::RgbImage;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -37,8 +41,11 @@ use crate::{
 pub struct AnalyseConfig {
     /// Local cache of downloaded models.
     pub models_dir: PathBuf,
-    /// `<name>/<version>` in the `models` container.
-    pub rows_model: String,
+    /// Models the worker image carries (`<name>/<version>/` folders), used before the
+    /// `models` container.
+    pub baked_dir: PathBuf,
+    /// `<name>/<version>`: the HUD locator, which finds the rows, and the icon reader.
+    pub hud_model: String,
     pub icons_model: String,
     /// ONNX Runtime threads per model; low, like ffmpeg's, for the shared plan.
     pub threads: usize,
@@ -46,7 +53,7 @@ pub struct AnalyseConfig {
 
 impl AnalyseConfig {
     pub fn version(&self) -> String {
-        format!("rows={} icons={}", self.rows_model, self.icons_model)
+        format!("hud={} icons={}", self.hud_model, self.icons_model)
     }
 }
 
@@ -77,7 +84,7 @@ pub async fn run(worker: &Worker, payload: &Value) -> Result<(), JobError> {
     }
 
     let started = Instant::now();
-    let rows_model = ensure_model(worker, config, &config.rows_model).await?;
+    let hud_model = ensure_model(worker, config, &config.hud_model).await?;
     let icons_model = ensure_model(worker, config, &config.icons_model).await?;
 
     let dir = worker.transcode.temp_dir.join(format!("analyse-{clip_id}"));
@@ -105,7 +112,7 @@ pub async fn run(worker: &Worker, payload: &Value) -> Result<(), JobError> {
         let deadline = Instant::now() + time_limit(length);
         let threads = config.threads;
         tokio::task::spawn_blocking(move || {
-            read_killfeed(&rows_model, &icons_model, &input, threads, deadline)
+            read_killfeed(&hud_model, &icons_model, &input, threads, deadline)
         })
         .await
         .map_err(anyhow::Error::from)?
@@ -152,19 +159,19 @@ pub(crate) struct Input {
     pub(crate) height: u32,
 }
 
-/// Decodes the input at [`SAMPLE_FPS`], cut to the killfeed corner, and runs the models on
-/// every frame. Blocking: run it off the async runtime.
+/// Decodes the input at [`SAMPLE_FPS`] and runs the models on every frame. Blocking: run
+/// it off the async runtime.
 fn read_killfeed(
-    rows_model: &Path,
+    hud_model: &Path,
     icons_model: &Path,
     input: &Input,
     threads: usize,
     deadline: Instant,
 ) -> anyhow::Result<(Vec<Kill>, u32)> {
-    let mut finder = RowFinder::load(&rows_model.join("model.onnx"), threads)?;
+    let mut locator = HudLocator::load(&hud_model.join("model.onnx"), threads)?;
     let mut reader = IconReader::load(&icons_model.join("model.onnx"), threads)?;
-    let mut analyzer = Analyzer::new(&mut finder, &mut reader);
-    sample_corner(input, deadline, |t, corner| analyzer.push(t, corner))?;
+    let mut analyzer = Analyzer::new(&mut locator, &mut reader);
+    sample_frames(input, deadline, |t, frame| analyzer.push(t, frame))?;
     let frames = analyzer.frames();
     Ok((analyzer.finish(), frames))
 }
@@ -172,15 +179,14 @@ fn read_killfeed(
 /// How much of ffmpeg's stderr is kept: the end, where the reason it stopped is.
 const STDERR_TAIL: usize = 16 << 10;
 
-/// Decodes the input at [`SAMPLE_FPS`], cut to the killfeed corner, and hands each frame
-/// to `frame` with its time. ffmpeg is stopped at `deadline`. Returns how many frames
-/// there were.
-pub(crate) fn sample_corner(
+/// Decodes the input at [`SAMPLE_FPS`] and hands each whole frame to `frame` with its
+/// time. ffmpeg is stopped at `deadline`. Returns how many frames there were.
+pub(crate) fn sample_frames(
     input: &Input,
     deadline: Instant,
     mut frame: impl FnMut(f64, &RgbImage) -> anyhow::Result<()>,
 ) -> anyhow::Result<u32> {
-    let (cx, cy, cw, ch) = crop_box(input.width, input.height);
+    let (width, height) = (input.width, input.height);
     // The same formats and codecs as the transcode, and no more of it than it kept.
     let mut ffmpeg = Command::new("nice")
         .args(["-n", "10", "ffmpeg", "-v", "error", "-nostdin"])
@@ -190,11 +196,7 @@ pub(crate) fn sample_corner(
         .arg("-map")
         .arg(format!("0:{}", input.stream))
         .arg("-vf")
-        // Cut in RGB: on 4:2:0 video, crop rounds an odd size or offset down to even, and
-        // the frames would no longer be the size read below.
-        .arg(format!(
-            "fps={SAMPLE_FPS},format=rgb24,crop={cw}:{ch}:{cx}:{cy}"
-        ))
+        .arg(format!("fps={SAMPLE_FPS},format=rgb24"))
         .args(["-sn", "-dn", "-t", &CUT_AT_S.to_string()])
         .args(["-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
         .stdin(Stdio::null())
@@ -236,7 +238,7 @@ pub(crate) fn sample_corner(
         }
     });
 
-    let mut buf = vec![0u8; (cw * ch * 3) as usize];
+    let mut buf = vec![0u8; (width * height * 3) as usize];
     let mut n = 0u32;
     let mut result = Ok(());
     let mut late = false;
@@ -248,9 +250,9 @@ pub(crate) fn sample_corner(
         if stdout.read_exact(&mut buf).is_err() {
             break;
         }
-        result = RgbImage::from_raw(cw, ch, buf.clone())
+        result = RgbImage::from_raw(width, height, buf.clone())
             .context("frame size")
-            .and_then(|corner| frame(f64::from(n) / SAMPLE_FPS, &corner));
+            .and_then(|image| frame(f64::from(n) / SAMPLE_FPS, &image));
         if result.is_err() {
             break;
         }
@@ -288,13 +290,17 @@ struct CardFile {
 /// The files the worker needs from a model version.
 const MODEL_FILES: [&str; 2] = ["model.onnx", "classes.json"];
 
-/// Makes sure `<name>/<version>` is in the local cache, downloading and checking it against
-/// its model card if not. Returns the local folder.
+/// Makes sure `<name>/<version>` is at hand: the worker image's copy if it carries that
+/// version, otherwise the local cache, downloading it and checking it against its model
+/// card if it isn't there yet. Returns the model's folder.
 async fn ensure_model(
     worker: &Worker,
     config: &AnalyseConfig,
     name: &str,
 ) -> anyhow::Result<PathBuf> {
+    if let Some(baked) = baked_model(config, name).await? {
+        return Ok(baked);
+    }
     let local = config.models_dir.join(name);
     let verified = local.join(".verified");
     if tokio::fs::try_exists(&verified).await.unwrap_or(false) {
@@ -346,6 +352,40 @@ async fn ensure_model(
         "downloaded model"
     );
     Ok(local)
+}
+
+/// The worker image's copy of `name`, if it has one, checked against its model card the
+/// first time this process uses it (the HUD locator is over 100 MB). A copy that doesn't
+/// match its card is an error, not a reason to download: the image is broken.
+async fn baked_model(config: &AnalyseConfig, name: &str) -> anyhow::Result<Option<PathBuf>> {
+    static CHECKED: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+    let dir = config.baked_dir.join(name);
+    let card_path = dir.join("model-card.json");
+    if !tokio::fs::try_exists(&card_path).await.unwrap_or(false) {
+        return Ok(None);
+    }
+    if CHECKED.lock().unwrap().contains(&dir) {
+        return Ok(Some(dir));
+    }
+    let card: ModelCard = serde_json::from_slice(&tokio::fs::read(&card_path).await?)
+        .with_context(|| format!("reading the model card of the image's {name}"))?;
+    for file in MODEL_FILES {
+        let want = &card
+            .files
+            .get(file)
+            .ok_or_else(|| anyhow!("the image's {name} model card lists no {file}"))?
+            .sha256;
+        let path = dir.join(file);
+        let got = tokio::task::spawn_blocking(move || sha256_file(&path)).await??;
+        if &got != want {
+            bail!(
+                "the image's {name}/{file} doesn't match its model card (sha256 {got}, expected {want})"
+            );
+        }
+    }
+    CHECKED.lock().unwrap().insert(dir.clone());
+    tracing::info!(model = name, "using the model in the image");
+    Ok(Some(dir))
 }
 
 fn sha256_file(path: &Path) -> anyhow::Result<String> {

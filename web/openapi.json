@@ -3904,7 +3904,7 @@
           },
           "spare": {
             "type": "boolean",
-            "description": "Left out because the show was full (10 clips), not by the host (decision 56)."
+            "description": "Left out because the show was full (10 clips), not by the host (decision 57)."
           }
         }
       },

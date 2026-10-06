@@ -12,7 +12,7 @@ const SUGGESTED = 4;
 
 // The show's side panel (canvas 2.2, 2.3): what's still to come, the next one counting
 // down, and Add a clip, which anyone in the show can do (to the end of the queue, up to
-// 10 clips). Anyone can put any of them on straight away (decision 56). It folds away
+// 10 clips). Anyone can put any of them on straight away (decision 57). It folds away
 // for a bigger player.
 export function UpNext({
   showId,

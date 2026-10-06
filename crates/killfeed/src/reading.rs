@@ -61,16 +61,20 @@ pub fn owner(corner: &RgbImage, row: &Row) -> Owner {
     let (y0, y1) = (row.y0.round() as i32, row.y1.round() as i32);
     let row_h = (y1 - y0).max(1);
 
-    // Red outline: the top and bottom edges are red along most of the row. Search a few
-    // pixels around each edge, since the model's box is not pixel-exact.
+    // Red outline: a red line along most of the row near its top edge and another near its
+    // bottom edge. The model's box can be a few pixels off the row (a sixth of its height
+    // happens), so each line is searched for a quarter of the height around its edge. The
+    // lines of an outline are 0.80-0.84 box heights apart on real rows; stacked rows touch,
+    // so a row between two outlined ones has red lines just outside its box, about 1.08
+    // apart, which aren't its outline.
     let band = (row_h / 8).max(2);
     let inner = (x0 + row_h / 2)..(x1 - row_h / 2);
-    let edge_red = |y: i32| {
+    let red_line = |y: i32| {
         let columns = inner.clone().step_by(2);
         let total = columns.clone().count().max(1);
         let red = columns
             .filter(|&x| {
-                (y - band..=y + band).any(|yy| {
+                (y - 1..=y + 1).any(|yy| {
                     let p = px(x, yy);
                     p[0] >= 110 && redness(p) >= 60
                 })
@@ -78,35 +82,82 @@ pub fn owner(corner: &RgbImage, row: &Row) -> Owner {
             .count();
         red as f32 / total as f32
     };
-    if edge_red(y0) >= 0.6 && edge_red(y1) >= 0.6 {
+    let search = (row_h / 4).max(2);
+    let lines_near = |edge: i32| -> Vec<i32> {
+        (edge - search..=edge + search)
+            .filter(|&y| red_line(y) >= 0.6)
+            .collect()
+    };
+    let (tops, bottoms) = (lines_near(y0), lines_near(y1));
+    let outline = tops.iter().any(|top| {
+        bottoms.iter().any(|bottom| {
+            let apart = (bottom - top) as f32 / row_h as f32;
+            (0.7..=0.95).contains(&apart)
+        })
+    });
+    if outline {
         return Owner::MyKill;
     }
 
-    // Red fill: the row's dark background is clearly redder than what's around it (the
-    // death screen tints everything red, so compare against the surroundings).
-    let median = |mut v: Vec<i32>| {
-        v.sort_unstable();
-        v.get(v.len() / 2).copied().unwrap_or(0)
-    };
-    let dark_redness = |xs: std::ops::Range<i32>| {
-        let mut v = Vec::new();
-        for y in (y0 + band + 1)..(y1 - band) {
+    // Red fill: CS2 fills the player's death row crimson, semi-transparent. On rows from 31
+    // clips labelled by eye (68 sightings of 16 deaths, 648 of other rows), the row's dark
+    // pixels are, on average:
+    // - crimson: within 22 degrees of pure red and at least 40 redder than green and blue;
+    // - or, washed out over a bright scene, still within 12 degrees and 20 redder, while the
+    //   scene left of the row isn't red.
+    // A plain row over an orange wall is red too, but orange (23-35 degrees); over the red
+    // death screen every row looks red, hence the paler test needs a scene that isn't.
+    let mean = |xs: std::ops::Range<i32>, ys: std::ops::Range<i32>, dark_only: bool| {
+        let (mut sum, mut n) = ([0f32; 3], 0f32);
+        for y in ys {
             for x in xs.clone().step_by(2) {
                 let p = px(x, y);
                 let lum = (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3;
-                if lum < 120 {
-                    v.push(redness(p));
+                if !dark_only || lum < 120 {
+                    for c in 0..3 {
+                        sum[c] += f32::from(p[c]);
+                    }
+                    n += 1.0;
                 }
             }
         }
-        median(v)
+        (n > 0.0).then(|| sum.map(|v| v / n))
     };
-    let fill = dark_redness(inner.clone());
-    let outside = dark_redness((x0 - row_h).max(0)..(x0 - 2).max(0));
-    if fill >= 35 && fill - outside >= 20 {
+    let Some(fill) = mean(inner, (y0 + band + 1)..(y1 - band), true) else {
+        return Owner::Other;
+    };
+    let scene = mean((x0 - row_h).max(0)..(x0 - 2).max(0), y0..y1, false);
+    let red = |c: [f32; 3]| c[0] - c[1].max(c[2]);
+    let crimson = hue(fill).abs() <= 22.0 && red(fill) >= 40.0;
+    let pale_crimson = hue(fill).abs() <= 12.0
+        && red(fill) >= 20.0
+        && scene.is_some_and(|scene| red(scene) < 10.0);
+    if crimson || pale_crimson {
         Owner::MyDeath
     } else {
         Owner::Other
+    }
+}
+
+/// The hue of `rgb` in degrees, -180..180 with pure red at 0 (0 for grays).
+fn hue([r, g, b]: [f32; 3]) -> f32 {
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let chroma = max - min;
+    if chroma <= 0.0 {
+        return 0.0;
+    }
+    let sector = if max == r {
+        (g - b) / chroma
+    } else if max == g {
+        (b - r) / chroma + 2.0
+    } else {
+        (r - g) / chroma + 4.0
+    };
+    let degrees = 60.0 * sector;
+    if degrees > 180.0 {
+        degrees - 360.0
+    } else {
+        degrees
     }
 }
 
@@ -159,6 +210,50 @@ mod tests {
     }
 
     #[test]
+    fn the_outline_is_found_around_a_box_a_few_pixels_off() {
+        let mut c = corner([90, 100, 110], [30, 30, 30]);
+        paint(&mut c, (100, 40, 300, 42), [200, 20, 30]);
+        paint(&mut c, (100, 62, 300, 64), [200, 20, 30]);
+        // The box 5 px low (a fifth of the row): its top edge is inside the row, its
+        // bottom edge on the scene below.
+        let low = Row {
+            y0: 45.0,
+            y1: 69.0,
+            ..ROW
+        };
+        assert_eq!(owner(&c, &low), Owner::MyKill);
+        let high = Row {
+            y0: 35.0,
+            y1: 59.0,
+            ..ROW
+        };
+        assert_eq!(owner(&c, &high), Owner::MyKill);
+    }
+
+    #[test]
+    fn a_row_between_two_outlined_rows_is_not_outlined() {
+        // Stacked rows touch, as in CS2: boxes 16..40, 40..64 and 64..88, each outline 2-3
+        // px inside its box. The outer two are the player's kills.
+        let mut c = RgbImage::from_pixel(320, 120, Rgb([90, 100, 110]));
+        paint(&mut c, (100, 16, 300, 88), [30, 30, 30]);
+        for (y0, y1) in [(16, 40), (64, 88)] {
+            paint(&mut c, (100, y0 + 2, 300, y0 + 4), [200, 20, 30]);
+            paint(&mut c, (100, y1 - 3, 300, y1 - 1), [200, 20, 30]);
+        }
+        // The middle row's box: red lines just outside it, but too far apart to be its
+        // outline.
+        assert_eq!(owner(&c, &ROW), Owner::Other);
+        for y0 in [16.0, 64.0] {
+            let outlined = Row {
+                y0,
+                y1: y0 + 24.0,
+                ..ROW
+            };
+            assert_eq!(owner(&c, &outlined), Owner::MyKill);
+        }
+    }
+
+    #[test]
     fn a_red_fill_is_the_players_death() {
         // Dark red on a gray scene.
         assert_eq!(
@@ -170,17 +265,48 @@ mod tests {
             owner(&corner([200, 200, 200], [90, 20, 25]), &ROW),
             Owner::MyDeath
         );
-        // The death screen tints everything red: a row as red as its surroundings is
-        // someone else's.
+        // The death screen tints everything red: a plain row over it is reddish, but not
+        // crimson enough (colours measured on real rows).
         assert_eq!(
-            owner(&corner([100, 40, 40], [100, 30, 30]), &ROW),
+            owner(&corner([148, 49, 49], [113, 83, 76]), &ROW),
             Owner::Other
+        );
+        assert_eq!(
+            owner(&corner([148, 49, 49], [82, 9, 11]), &ROW),
+            Owner::MyDeath
         );
         // A plain dark row.
         assert_eq!(
             owner(&corner([60, 60, 60], [30, 30, 35]), &ROW),
             Owner::Other
         );
+    }
+
+    #[test]
+    fn a_plain_row_over_an_orange_wall_is_not_a_death() {
+        // Red over green and blue like a death row, but orange (colours of a real row).
+        assert_eq!(
+            owner(&corner([220, 168, 120], [139, 103, 71]), &ROW),
+            Owner::Other
+        );
+    }
+
+    #[test]
+    fn a_death_row_washed_out_over_the_sky_is_still_a_death() {
+        // The fill shows the bright scene through it: pale, but still crimson.
+        let pale = [115, 91, 93];
+        assert_eq!(owner(&corner([205, 237, 252], pale), &ROW), Owner::MyDeath);
+        // As pale over a red scene is just the scene showing through.
+        assert_eq!(owner(&corner([150, 60, 60], pale), &ROW), Owner::Other);
+    }
+
+    #[test]
+    fn hue_is_degrees_from_red() {
+        assert_eq!(hue([200.0, 0.0, 0.0]), 0.0);
+        assert_eq!(hue([200.0, 200.0, 0.0]), 60.0);
+        assert_eq!(hue([0.0, 0.0, 200.0]), -120.0);
+        assert_eq!(hue([200.0, 0.0, 100.0]), -30.0);
+        assert_eq!(hue([90.0, 90.0, 90.0]), 0.0);
     }
 
     #[test]

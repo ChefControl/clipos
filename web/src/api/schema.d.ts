@@ -982,7 +982,7 @@ export interface components {
             playedAt?: string | null;
             /** Format: int32 */
             position: number;
-            /** @description Left out because the show was full (10 clips), not by the host (decision 56). */
+            /** @description Left out because the show was full (10 clips), not by the host (decision 57). */
             spare: boolean;
         };
         LostTo: {

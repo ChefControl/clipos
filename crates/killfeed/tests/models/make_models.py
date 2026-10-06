@@ -11,8 +11,9 @@ rerun this only to change them:
 
 Writes, next to this script:
 
-- `rows/`: a row finder (64x64 input) with six boxes: two good rows, a near-copy of the
-  first, one ending too far left, one too tall for a normal corner, and one too unsure.
+- `hud/`: a HUD locator (64x64 input, three of its classes) whose boxes, on a 640x360
+  frame, are: two killfeed rows in the killfeed corner (x 370.., y ..180), a near-copy
+  of the first, a row-like box in the chat (bottom left), a radar, and a row too unsure.
   Its scores drop to nothing on dark frames (average pixel below about 65), so a black
   frame has no rows.
 - `icons/`: an icon reader (32x32 input) answering for the first three slots of a sheet
@@ -107,23 +108,29 @@ def publish(folder, classes):
     (folder / "model-card.json").write_text(json.dumps(card, indent=2) + "\n")
 
 
-def rows():
-    classes = ["row"]
+def hud():
+    classes = ["radar", "killfeed_row", "money"]
+    W, H = 640, 360
+
+    def box(x0, y0, x1, y1):
+        """Frame pixels to the normalised cx, cy, w, h a locator answers."""
+        return ((x0 + x1) / 2 / W, (y0 + y1) / 2 / H, (x1 - x0) / W, (y1 - y0) / H)
+
     queries = [
-        # cx, cy, w, h, logit
-        ((0.70, 0.20, 0.60, 0.07), 4.0),  # a row
-        ((0.75, 0.30, 0.50, 0.07), 3.0),  # a second row, below
-        ((0.705, 0.205, 0.59, 0.07), 2.0),  # a near-copy of the first, weaker
-        ((0.30, 0.50, 0.20, 0.07), 4.0),  # ends at 40 % of the width: not a row
-        ((0.80, 0.60, 0.40, 0.20), 4.0),  # too tall, unless the corner is a crop
-        ((0.70, 0.80, 0.60, 0.07), -3.0),  # too unsure
+        # box in frame pixels, class, logit
+        (box(478, 30, 640, 42), "killfeed_row", 4.0),  # a row: the corner's 108..270 x 30..42
+        (box(505, 48, 640, 60), "killfeed_row", 3.0),  # a second row, below
+        (box(480, 31, 640, 43), "killfeed_row", 2.0),  # a near-copy of the first, weaker
+        (box(20, 250, 220, 262), "killfeed_row", 4.0),  # in the chat, outside the corner
+        (box(10, 10, 110, 110), "radar", 4.0),  # another element
+        (box(478, 80, 640, 92), "killfeed_row", -3.0),  # too unsure
     ]
-    folder = HERE / "rows"
+    folder = HERE / "hud"
     detector(
         folder / "model.onnx",
         64,
-        [box for box, _ in queries],
-        [logit_row(classes, "row", logit) for _, logit in queries],
+        [b for b, _, _ in queries],
+        [logit_row(classes, cls, logit) for _, cls, logit in queries],
         gate=True,
     )
     publish(folder, classes)
@@ -191,7 +198,7 @@ def misfit(name, input_name="input", dets=TensorProto.FLOAT, labels=TensorProto.
 
 
 if __name__ == "__main__":
-    rows()
+    hud()
     icons()
     dynamic()
     misfit("input-name.onnx", input_name="images")

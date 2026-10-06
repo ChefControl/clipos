@@ -1,0 +1,5 @@
+# The model versions baked into the worker image (deploy/worker.Dockerfile): deploy.yml
+# downloads these folders from the `models` container. They must be the worker's default
+# KILLFEED_HUD_MODEL and KILLFEED_ICONS_MODEL, in that order (a worker test checks).
+hud-locator/v1
+killfeed-icons/v1

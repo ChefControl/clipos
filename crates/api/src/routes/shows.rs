@@ -71,7 +71,7 @@ pub struct LineupEntry {
     pub position: i32,
     /// Left out by the host, or a spare; stays for the next show.
     pub dropped: bool,
-    /// Left out because the show was full (10 clips), not by the host (decision 56).
+    /// Left out because the show was full (10 clips), not by the host (decision 57).
     pub spare: bool,
     pub played_at: Option<DateTime<Utc>>,
     /// Who put it in the lineup (the host for tonight's clips).

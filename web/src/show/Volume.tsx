@@ -48,7 +48,7 @@ export function toggled(level: Level): Level {
   return { ...level, muted: true };
 }
 
-// The show's volume (decision 56): a round button in the player's bottom-left corner,
+// The show's volume (decision 57): a round button in the player's bottom-left corner,
 // across from Full screen. Hovering it (or tabbing to it) slides the volume out;
 // leaving it slides it back, and the button stays. Clicking the button mutes.
 export function Volume({ video }: { video: RefObject<HTMLVideoElement | null> }) {

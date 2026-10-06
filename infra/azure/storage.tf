@@ -38,8 +38,9 @@ resource "azurerm_storage_account" "media" {
   tags = local.tags
 }
 
-# `models` holds the killfeed detector's versioned models (models/<name>/<version>/), see
-# ChefControl/clipos-killfeed-training. The worker can only read them (app.tf).
+# `models` holds the killfeed and HUD models, versioned (models/<name>/<version>/), see
+# ChefControl/clipos-killfeed-training. The worker and the deploy identity, which bakes them
+# into the worker image, can only read them (app.tf, below).
 resource "azurerm_storage_container" "media" {
   for_each = toset(["originals", "playback", "posters", "models"])
 
@@ -76,6 +77,15 @@ resource "azurerm_role_assignment" "admin_media_reader" {
   role_definition_name = "Storage Blob Data Reader"
   principal_id         = var.admin_user.object_id
   principal_type       = "User"
+}
+
+# The deploy identity (GitHub Actions) reads the killfeed models to bake them into the
+# worker image (deploy.yml): read access to the `models` container only.
+resource "azurerm_role_assignment" "deploy_models_reader" {
+  scope                = azurerm_storage_container.media["models"].id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = var.deploy_identity.object_id
+  principal_type       = "ServicePrincipal"
 }
 
 # Your account (admin_user) publishes trained killfeed models from your machine: write

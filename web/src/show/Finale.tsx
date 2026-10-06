@@ -20,7 +20,7 @@ const COUNT_AFTER_MS = 1_000;
 
 // The finale (canvas 2.5): fail of the night, then clip of the night, 20 s each, on every
 // screen at once (the windows come from the server). Only people in the show vote, their
-// own clips included, since friends clip each other (decision 56); until it's over nobody
+// own clips included, since friends clip each other (decision 57); until it's over nobody
 // sees the counts, only who has voted (decision 43). When the vote closes the host's screen ends the show, and a tie is the
 // host's to break.
 export function Finale({ show, live, meId }: { show: Show; live: ShowLive; meId: string }) {

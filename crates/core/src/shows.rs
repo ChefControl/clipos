@@ -21,7 +21,7 @@ const FIRST_SHOW_DAYS: i32 = 7;
 /// How far past a clip's end a show reaction's moment may be.
 const REACTION_SLACK_MS: i32 = 1000;
 
-/// The most clips one show plays (decision 56). Tonight's clips past it wait for the next
+/// The most clips one show plays (decision 57). Tonight's clips past it wait for the next
 /// show as spares.
 pub const MAX_CLIPS: usize = 10;
 
@@ -104,7 +104,7 @@ pub struct LineupClip {
     pub added_by: Option<Uuid>,
     pub dropped: bool,
     /// Dropped because the lineup was full (`MAX_CLIPS`), not by the host: it waits for
-    /// the next show, and doesn't count as dropped there (decision 56).
+    /// the next show, and doesn't count as dropped there (decision 57).
     pub spare: bool,
     pub played_at: Option<DateTime<Utc>>,
 }
@@ -216,7 +216,7 @@ pub async fn past(pool: &PgPool, limit: i64) -> sqlx::Result<Vec<Show>> {
 /// was ever in a lineup comes back too, however old (someone added it from the archive).
 /// Except a clip dropped in two ended shows: it stops coming back (decision 28). It stays
 /// in the archive, and anyone in a show can still add it (`add_clip`). An abandoned show's
-/// drops don't count, and nor do spares, which only didn't fit (decision 56).
+/// drops don't count, and nor do spares, which only didn't fit (decision 57).
 pub async fn tonight(pool: &PgPool) -> sqlx::Result<Vec<Uuid>> {
     sqlx::query_scalar(
         "SELECT c.id FROM clips c
@@ -654,7 +654,7 @@ pub async fn start(pool: &PgPool, id: Uuid, by: Uuid) -> Result<()> {
     Ok(())
 }
 
-/// A clip started playing for everyone. Anyone in the show steers it (decision 56).
+/// A clip started playing for everyone. Anyone in the show steers it (decision 57).
 pub async fn mark_played(pool: &PgPool, id: Uuid, by: Uuid, clip: Uuid) -> Result<()> {
     let show = open_show(pool, id).await?;
     in_status(&show, &[ShowStatus::Live], "play clips")?;
@@ -760,7 +760,7 @@ pub async fn react(
 }
 
 /// A vote in the finale (decision 31): people in the show, for a played clip that isn't in
-/// the trash, their own included (decision 56); fail votes only for clips marked with 🍌.
+/// the trash, their own included (decision 57); fail votes only for clips marked with 🍌.
 /// Voting again changes the vote. A vote never lands after the show ended: the insert
 /// checks the finale is still on, and waits for an `end` that's counting.
 pub async fn vote(
@@ -775,7 +775,7 @@ pub async fn vote(
     if !is_participant(pool, id, voter).await? {
         return Err(ShowError::Forbidden("only people in the show vote"));
     }
-    // Your own clip too: friends clip each other (decision 56).
+    // Your own clip too: friends clip each other (decision 57).
     let played: bool = sqlx::query_scalar(
         "SELECT EXISTS (
             SELECT FROM show_clips sc JOIN clips c ON c.id = sc.clip_id

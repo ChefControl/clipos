@@ -42,7 +42,7 @@ const STATUS: Record<SyncStatus, [string, Tone]> = {
 };
 
 // The show, live (canvas 2.2 the host's screen, 2.3 a friend's): the clip everyone's
-// watching in sync, whose clip it is, the controls (everyone's since decision 56: pause,
+// watching in sync, whose clip it is, the controls (everyone's since decision 57: pause,
 // jump, next, React; your own volume), reactions floating up the player, and the side
 // panel with what's next. The host's screen still moves the show on between clips.
 export function Stage({
