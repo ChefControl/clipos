@@ -1,9 +1,10 @@
 //! The show hub (docs/PLAN.md, redesign, S5): one live room per open show. Browsers
 //! connect to `/api/shows/{id}/live` over a websocket; the first message carries the
 //! access token (browsers can't set headers on a websocket). The server holds the one
-//! true playback state, `LiveState`: only the host's intents change it, every change goes
-//! out to everyone, and each browser plays to it on its own clock (decision 34). Everyone
-//! starts together because play is scheduled a moment ahead (`lead`).
+//! true playback state, `LiveState`: the intents of anyone in the show change it (decision
+//! 56), every change goes out to everyone, and each browser plays to it on its own clock
+//! (decision 34). Everyone starts together because play is scheduled a moment ahead
+//! (`lead`).
 //!
 //! The state is saved on every change so a deploy restart resumes the show; the hub runs
 //! in this one api instance (one App Service instance, see the plan).
@@ -57,14 +58,14 @@ const KEEPALIVE: Duration = Duration::from_secs(25);
 const CLOSE_GRACE: Duration = Duration::from_secs(1);
 /// The largest message (and frame) a client may send; a hello with its token is ~2 KiB.
 const MAX_MESSAGE: usize = 16 * 1024;
-/// Reactions, ready and replay requests a connection may send: this many a second, in
-/// bursts of up to `BURST`. More are dropped.
+/// Steering, reactions and ready a connection may send: this many a second, in bursts of
+/// up to `BURST`. More are dropped.
 const RATE_PER_S: f64 = 10.0;
 const BURST: f64 = 20.0;
 /// Play starts this far ahead at least, so every browser can start together.
 const MIN_LEAD_MS: f64 = 300.0;
 const MAX_LEAD_MS: f64 = 2_000.0;
-/// The furthest ahead the host may schedule a start (`load` with `startAt`).
+/// The furthest ahead anyone may schedule a start (`load` with `startAt`).
 const MAX_START_AHEAD_MS: f64 = 5_000.0;
 
 /// How long things may take on a live connection. `Default` is what runs in production;
@@ -164,22 +165,27 @@ impl LiveState {
 )]
 pub enum ClientMsg {
     /// First message: who you are.
-    Hello { token: String },
+    Hello {
+        token: String,
+    },
     /// Clock sync: echoed back with the server's time. `rtt` is the client's latest
     /// measured round trip, which sets how far ahead play is scheduled.
-    Ping { client_ms: f64, rtt_ms: Option<f64> },
-    /// Host: put a clip on, paused at 0, or playing from server time `start_at` (at most
-    /// 5 s ahead; sooner than the lead play needs is moved to then).
+    Ping {
+        client_ms: f64,
+        rtt_ms: Option<f64>,
+    },
+    /// Put a clip on, paused at 0, or playing from server time `start_at` (at most 5 s
+    /// ahead; sooner than the lead play needs is moved to then). Anyone in the show steers
+    /// (decision 57).
     Load {
         clip_id: Uuid,
         start_at: Option<f64>,
     },
-    /// Host.
     Play,
-    /// Host.
     Pause,
-    /// Host.
-    Seek { position_ms: f64 },
+    Seek {
+        position_ms: f64,
+    },
     /// A tap in the reaction dock (six reactions or 🍌), at a moment in the clip.
     React {
         clip_id: Uuid,
@@ -187,19 +193,24 @@ pub enum ClientMsg {
         at_ms: i32,
     },
     /// "I'm ready, sound on".
-    Ready { ready: bool },
-    /// A friend asks the host to play the clip again.
-    ReplayRequest,
+    Ready {
+        ready: bool,
+    },
     /// "Take over as host", once the host has been gone a minute and the clip ended.
     TakeOver,
 }
 
 impl ClientMsg {
-    /// Messages anyone can send that reach everyone (or the database): rate-limited.
+    /// Messages that reach everyone (or the database): rate-limited.
     fn is_limited(&self) -> bool {
         matches!(
             self,
-            Self::React { .. } | Self::Ready { .. } | Self::ReplayRequest
+            Self::Load { .. }
+                | Self::Play
+                | Self::Pause
+                | Self::Seek { .. }
+                | Self::React { .. }
+                | Self::Ready { .. }
         )
     }
 }
@@ -232,9 +243,6 @@ pub enum ServerMsg {
         clip_id: Uuid,
         emoji: String,
         at_ms: i32,
-    },
-    ReplayRequest {
-        user_id: Uuid,
     },
     /// Something in the stored show changed (lineup, who joined, votes, status): fetch
     /// `GET /api/shows/{id}` again.
@@ -351,7 +359,7 @@ pub struct Room {
     id: Uuid,
     tx: broadcast::Sender<ServerMsg>,
     state: Mutex<RoomState>,
-    /// Whose turn it is to change the live state (see `host_turn`).
+    /// Whose turn it is to change the live state (see `steer_turn`).
     steering: tokio::sync::Mutex<()>,
 }
 
@@ -856,7 +864,7 @@ async fn handle(
             })
         }
         ClientMsg::Load { clip_id, start_at } => {
-            let _turn = match host_turn(pool, room, user).await {
+            let _turn = match steer_turn(pool, room).await {
                 Ok(turn) => turn,
                 Err(why) => return error(why),
             };
@@ -867,7 +875,7 @@ async fn handle(
             };
             let live = change(room, |live, lead| {
                 let now = now_ms();
-                // A start further ahead is a host whose clock is off (or a bad client): the
+                // A start further ahead is a browser whose clock is off (or a bad client): the
                 // clip would count as played long before anyone sees it, and not end in
                 // time for a takeover.
                 let at = match start_at {
@@ -885,7 +893,7 @@ async fn handle(
             commit(pool, room, user.id, live).await
         }
         ClientMsg::Play => {
-            let _turn = match host_turn(pool, room, user).await {
+            let _turn = match steer_turn(pool, room).await {
                 Ok(turn) => turn,
                 Err(why) => return error(why),
             };
@@ -920,7 +928,7 @@ async fn handle(
             commit(pool, room, user.id, live).await
         }
         ClientMsg::Pause => {
-            host_change(pool, room, user, |live, _| {
+            steer(pool, room, user, |live, _| {
                 let now = now_ms();
                 live.position_ms = live.position_at(now);
                 live.playing = false;
@@ -930,7 +938,7 @@ async fn handle(
             .await
         }
         ClientMsg::Seek { position_ms } => {
-            host_change(pool, room, user, |live, lead| {
+            steer(pool, room, user, |live, lead| {
                 if !position_ms.is_finite() {
                     return Err("bad position");
                 }
@@ -965,10 +973,6 @@ async fn handle(
             }
             Err(e) => error(e.to_string()),
         },
-        ClientMsg::ReplayRequest => {
-            room.send(ServerMsg::ReplayRequest { user_id: user.id });
-            None
-        }
         ClientMsg::TakeOver => {
             let takeover_after_ms = state.hub.timing.takeover_after.as_secs_f64() * 1000.0;
             let (allowed, old_host) = {
@@ -1016,20 +1020,17 @@ fn internal(e: impl std::fmt::Display) -> Option<ServerMsg> {
     error("something went wrong")
 }
 
-/// The host's turn to change the live state, or why `user` can't: only the host steers,
-/// and only while the show is live (not in the lobby or the finale).
+/// A turn to change the live state, or why not: anyone in the room steers (decision 57;
+/// connecting joins the show), but only while the show is live (not in the lobby or the
+/// finale).
 ///
 /// Changes go one at a time, each from its checks to its broadcast, so nothing lands
 /// between a change's checks and the state it sends out. This is the one lock held across
 /// awaits; the room's own lock never is.
-async fn host_turn<'a>(
+async fn steer_turn<'a>(
     pool: &PgPool,
     room: &'a Room,
-    user: &User,
 ) -> Result<tokio::sync::MutexGuard<'a, ()>, &'static str> {
-    if room.lock().host != user.id {
-        return Err("only the host can do that");
-    }
     // The status is checked once it's this change's turn: the show may move on to the
     // finale while it waits.
     let turn = room.steering.lock().await;
@@ -1057,13 +1058,13 @@ fn change(
     Ok(live)
 }
 
-async fn host_change(
+async fn steer(
     pool: &PgPool,
     room: &Room,
     user: &User,
     f: impl FnOnce(&mut LiveState, f64) -> Result<(), &'static str>,
 ) -> Option<ServerMsg> {
-    let _turn = match host_turn(pool, room, user).await {
+    let _turn = match steer_turn(pool, room).await {
         Ok(turn) => turn,
         Err(why) => return error(why),
     };
@@ -1071,11 +1072,11 @@ async fn host_change(
     commit(pool, room, user.id, live).await
 }
 
-/// Puts a new state out, with the host's turn held: counts the clip as played once it
+/// Puts a new state out, with the steering turn held: counts the clip as played once it
 /// plays for everyone, stamps the time, saves it, and only then makes it the room's state
 /// and sends it to everyone. So the welcome, the saved copy and the broadcast only ever
-/// carry it in its final form. If the clip can't be counted nothing changes, and the host
-/// gets an error.
+/// carry it in its final form. If the clip can't be counted nothing changes, and whoever
+/// asked gets an error.
 async fn commit(
     pool: &PgPool,
     room: &Room,
@@ -1138,7 +1139,7 @@ async fn playable(
         .ok_or("that clip's length is unknown"))
 }
 
-/// Takes the clip off for everyone (`clipId: null`, paused), with the host's turn held.
+/// Takes the clip off for everyone (`clipId: null`, paused), with the steering turn held.
 async fn unload(pool: &PgPool, room: &Room) {
     let host = room.lock().host;
     let live = change(room, |live, _| {
@@ -1205,12 +1206,16 @@ mod tests {
         assert!(matches!(msg, ClientMsg::Seek { position_ms } if position_ms == 1500.0));
         let msg: ClientMsg = serde_json::from_str(r#"{"type":"play"}"#).unwrap();
         assert!(matches!(msg, ClientMsg::Play));
-        let out = serde_json::to_value(ServerMsg::ReplayRequest {
+        let out = serde_json::to_value(ServerMsg::Reaction {
             user_id: Uuid::nil(),
+            clip_id: Uuid::nil(),
+            emoji: "🔥".into(),
+            at_ms: 1200,
         })
         .unwrap();
-        assert_eq!(out["type"], "replayRequest");
+        assert_eq!(out["type"], "reaction");
         assert_eq!(out["userId"], Uuid::nil().to_string());
+        assert_eq!(out["atMs"], 1200);
         let out = serde_json::to_value(ServerMsg::ShowOver).unwrap();
         assert_eq!(out, serde_json::json!({ "type": "showOver" }));
     }

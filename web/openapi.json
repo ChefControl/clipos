@@ -2057,7 +2057,7 @@
         "tags": [
           "shows"
         ],
-        "summary": "Anyone in the show adds a clip to the end of the queue.",
+        "summary": "Anyone in the show adds a clip to the end of the queue, up to 10 clips.",
         "operationId": "add_clip",
         "parameters": [
           {
@@ -2133,7 +2133,7 @@
             }
           },
           "409": {
-            "description": "Already in the lineup, or not in the lobby or live",
+            "description": "Already in the lineup, the show has 10 clips, or not in the lobby or live",
             "content": {
               "application/json": {
                 "schema": {
@@ -2155,7 +2155,7 @@
         "tags": [
           "shows"
         ],
-        "summary": "The host: this clip started playing for everyone.",
+        "summary": "Anyone in the show: this clip started playing for everyone.",
         "operationId": "mark_played",
         "parameters": [
           {
@@ -2211,7 +2211,7 @@
             }
           },
           "403": {
-            "description": "Not the host",
+            "description": "Not in the show",
             "content": {
               "application/json": {
                 "schema": {
@@ -2539,7 +2539,7 @@
             }
           },
           "400": {
-            "description": "A clip that isn't waiting in the lineup, or one twice",
+            "description": "A clip that isn't waiting in the lineup, one twice, or more than 10 clips",
             "content": {
               "application/json": {
                 "schema": {
@@ -3872,7 +3872,8 @@
         "required": [
           "clip",
           "position",
-          "dropped"
+          "dropped",
+          "spare"
         ],
         "properties": {
           "addedBy": {
@@ -3888,7 +3889,7 @@
           },
           "dropped": {
             "type": "boolean",
-            "description": "Left out by the host; stays for the next show."
+            "description": "Left out by the host, or a spare; stays for the next show."
           },
           "playedAt": {
             "type": [
@@ -3900,6 +3901,10 @@
           "position": {
             "type": "integer",
             "format": "int32"
+          },
+          "spare": {
+            "type": "boolean",
+            "description": "Left out because the show was full (10 clips), not by the host (decision 57)."
           }
         }
       },
@@ -4311,7 +4316,7 @@
               "type": "string",
               "format": "uuid"
             },
-            "description": "The clips still to play, in order. Ones left out are dropped (they stay for the\nnext show)."
+            "description": "The clips still to play, in order, at most 10 with the played ones. Ones left out\nare dropped (they stay for the next show)."
           }
         },
         "additionalProperties": false

@@ -12,6 +12,8 @@ import { type PastShow, usePastShows } from "./hooks";
 
 /** Shows on the archive before "Show older shows". */
 const FIRST = 3;
+/** "Also played" thumbnails on a show before "and 3 more clips". */
+const ALSO_SHOWN = 5;
 
 // The archive's top half (canvas 4.1): every show that ended, newest first, with its
 // winners, who watched and what else played, and its replay. Beside the heading, the
@@ -178,8 +180,8 @@ function ShowCard({ show, last }: { show: PastShow; last: boolean }) {
       {rest.length > 0 && (
         <div className="flex flex-col gap-1.5">
           <span className="font-mono text-[11px] text-muted">Also played</span>
-          <ul className="flex flex-wrap gap-2">
-            {rest.map((c) => (
+          <ul className="flex flex-wrap items-center gap-2">
+            {rest.slice(0, ALSO_SHOWN).map((c) => (
               <li key={c.id}>
                 <Link
                   to="/clips/$clipId"
@@ -191,6 +193,12 @@ function ShowCard({ show, last }: { show: PastShow; last: boolean }) {
                 />
               </li>
             ))}
+            {rest.length > ALSO_SHOWN && (
+              <li className="text-sm text-muted">
+                and {rest.length - ALSO_SHOWN} more{" "}
+                {rest.length - ALSO_SHOWN === 1 ? "clip" : "clips"}
+              </li>
+            )}
           </ul>
         </div>
       )}

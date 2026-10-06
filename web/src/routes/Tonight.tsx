@@ -7,6 +7,7 @@ import { formatDuration, shortDate } from "../lib/format";
 import { useTitle } from "../lib/useTitle";
 import {
   joinLink,
+  MAX_CLIPS,
   moveTo,
   type PastShow,
   type Show,
@@ -49,9 +50,11 @@ export function Tonight() {
   return <NextShow clips={clips} />;
 }
 
-/** No show on yet: what the next one would play, and Host. */
+/** No show on yet: what the next one would play, and Host. A show plays the first 10;
+ *  the rest wait for the one after (decision 57). */
 function NextShow({ clips }: { clips: Clip[] }) {
   const create = useCreateShow();
+  const later = clips.slice(MAX_CLIPS);
   return (
     <Page backdrop={clips[0]?.posterUrl}>
       <Hero
@@ -73,7 +76,14 @@ function NextShow({ clips }: { clips: Clip[] }) {
         {create.error && <LoadError error={create.error} />}
       </Hero>
       <Below>
-        <Lineup clips={clips} note="since the last show" />
+        <Lineup clips={clips.slice(0, MAX_CLIPS)} note="since the last show">
+          {later.length > 0 && (
+            <Waiting
+              label={`Over ${MAX_CLIPS} clips · ${later.length} more wait for the next show`}
+              clips={later}
+            />
+          )}
+        </Lineup>
       </Below>
     </Page>
   );
@@ -92,7 +102,8 @@ function HostLobby({ initial }: { initial: Show }) {
     toast(`Couldn't ${what}: ${err.message}`, "danger");
 
   const waiting = show.lineup.filter((l) => !l.dropped && !l.playedAt);
-  const dropped = show.lineup.filter((l) => l.dropped);
+  const spares = show.lineup.filter((l) => l.spare);
+  const dropped = show.lineup.filter((l) => l.dropped && !l.spare);
   const byId = new Map(show.lineup.map((l) => [l.clip.id, l.clip]));
   // While a change is on its way, the order it asked for.
   const order = setLineup.isPending ? setLineup.variables : waiting.map((l) => l.clip.id);
@@ -100,6 +111,18 @@ function HostLobby({ initial }: { initial: Show }) {
   const reorder = (ids: string[]) =>
     setLineup.mutate(ids, { onError: failed("change the lineup") });
   const online = new Set(live.presence?.online ?? []);
+  const full = clips.length >= MAX_CLIPS;
+  const putBack = (clip: Clip) => (
+    <Button
+      size="sm"
+      className="ml-auto"
+      disabled={addClip.isPending || full}
+      title={full ? `A show has at most ${MAX_CLIPS} clips: drop one first` : undefined}
+      onClick={() => addClip.mutate(clip.id, { onError: failed("put it back") })}
+    >
+      Put back
+    </Button>
+  );
 
   return (
     <Page backdrop={clips[0]?.posterUrl}>
@@ -108,7 +131,7 @@ function HostLobby({ initial }: { initial: Show }) {
         title={clips.length ? newClips(clips.length) : <>Nothing in the lineup.</>}
         body="Start the show and drop the link in your Discord call. Everyone watches on their own screen, in sync with you. Keep talking in voice."
         art={<PosterFan clips={clips} />}
-        note="You host: only you play, pause and skip. Everyone else reacts, asks for replays and adds clips."
+        note="You host: you set the lineup and start. In the show everyone plays, pauses and skips, reacts and adds clips."
       >
         <Button
           variant="primary"
@@ -167,33 +190,25 @@ function HostLobby({ initial }: { initial: Show }) {
       <Below>
         <Lineup
           clips={clips}
-          note="since the last show"
+          note={`${clips.length} of ${MAX_CLIPS} · since the last show`}
           edit={{
             move: (id, to) => reorder(moveTo(order, id, to)),
             drop: (id) => reorder(order.filter((c) => c !== id)),
           }}
         >
+          {spares.length > 0 && (
+            <Waiting
+              label={`Over ${MAX_CLIPS} clips · they wait for the next show`}
+              clips={spares.map((l) => l.clip)}
+              action={putBack}
+            />
+          )}
           {dropped.length > 0 && (
-            <div className="mt-2 flex flex-col border-t border-white/8 pt-3">
-              <span className="px-1 pb-1 font-mono text-xs text-muted">
-                Dropped · they wait for the next show
-              </span>
-              {dropped.map((l) => (
-                <div key={l.clip.id} className="flex items-center gap-3 px-1 py-1.5">
-                  <span dir="auto" className="min-w-0 truncate font-semibold text-soft">
-                    {l.clip.title}
-                  </span>
-                  <Button
-                    size="sm"
-                    className="ml-auto"
-                    disabled={addClip.isPending}
-                    onClick={() => addClip.mutate(l.clip.id, { onError: failed("put it back") })}
-                  >
-                    Put back
-                  </Button>
-                </div>
-              ))}
-            </div>
+            <Waiting
+              label="Dropped · they wait for the next show"
+              clips={dropped.map((l) => l.clip)}
+              action={putBack}
+            />
           )}
         </Lineup>
       </Below>
@@ -538,6 +553,31 @@ function Lineup({
       </span>
       {children}
     </Panel>
+  );
+}
+
+/** Clips under the lineup that wait for the next show: dropped, or over the 10. */
+function Waiting({
+  label,
+  clips,
+  action,
+}: {
+  label: string;
+  clips: Clip[];
+  action?: (clip: Clip) => ReactNode;
+}) {
+  return (
+    <div className="mt-2 flex flex-col border-t border-white/8 pt-3">
+      <span className="px-1 pb-1 font-mono text-xs text-muted">{label}</span>
+      {clips.map((c) => (
+        <div key={c.id} className="flex min-h-9 items-center gap-3 px-1 py-1.5">
+          <span dir="auto" className="min-w-0 truncate font-semibold text-soft">
+            {c.title}
+          </span>
+          {action?.(c)}
+        </div>
+      ))}
+    </div>
   );
 }
 

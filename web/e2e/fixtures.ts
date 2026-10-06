@@ -206,6 +206,7 @@ export const show: Show = {
     clip,
     position,
     dropped: false,
+    spare: false,
     playedAt: null,
     addedBy: me.id,
   })),

@@ -45,6 +45,7 @@ class Shows {
         clip,
         position,
         dropped: false,
+        spare: false,
         playedAt: null,
         addedBy: me.id,
       })),
@@ -93,7 +94,10 @@ class Shows {
       if (method === "POST" && rest === "/clips") {
         const entry = show.lineup.find((l) => l.clip.id === body.clipId);
         if (entry) {
-          show.lineup = [...show.lineup.filter((l) => l !== entry), { ...entry, dropped: false }];
+          show.lineup = [
+            ...show.lineup.filter((l) => l !== entry),
+            { ...entry, dropped: false, spare: false },
+          ];
         }
       }
       if (method === "POST" && rest === "/start") show.status = "live";
@@ -231,6 +235,56 @@ test("hosting: open the lobby, reorder, drop and put back, copy the link, start"
   await page.getByRole("button", { name: "Start the show" }).click();
   await expect(page).toHaveURL(new RegExp(`/shows/${LOBBY_ID}$`));
   expect(shows.requests.at(-1)?.path).toBe(`/api/shows/${LOBBY_ID}/start`);
+});
+
+/** `n` ready clips of Jamie's, "Clip 1" to "Clip n". */
+const many = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({
+    ...clips.long,
+    id: `10000000-0000-4000-8000-0000000002${String(i).padStart(2, "0")}`,
+    title: `Clip ${i + 1}`,
+  }));
+
+test("a show plays 10 clips: the rest wait for the next one", async ({ page }) => {
+  await open(page, "/tonight", false, undefined, (p) =>
+    p.route("**/api/shows/tonight", (route) =>
+      json(route, { ...tonight, show: null, clips: many(12) }),
+    ),
+  );
+  await expect(page.getByRole("heading", { name: /12 new clips/ })).toBeVisible();
+  await expect.poll(() => lineupTitles(page)).toHaveLength(10);
+  await expect(page.getByText("Over 10 clips · 2 more wait for the next show")).toBeVisible();
+  await expect(page.getByText("Clip 12")).toBeVisible();
+});
+
+test("a full lobby: spares wait under it, and go in once there's room", async ({ page }) => {
+  const lobby = Shows.lobby();
+  lobby.lineup = many(12).map((clip, position) => ({
+    clip,
+    position,
+    dropped: position >= 10,
+    spare: position >= 10,
+    playedAt: null,
+    addedBy: me.id,
+  }));
+  const shows = new Shows(lobby);
+  await open(page, "/tonight", false, undefined, (p) => shows.route(p));
+  await expect(page.getByText("10 of 10 · since the last show")).toBeVisible();
+  await expect(page.getByText("Over 10 clips · they wait for the next show")).toBeVisible();
+  const putBack = page.getByRole("button", { name: "Put back" });
+  await expect(putBack).toHaveCount(2);
+  await expect(putBack.first()).toBeDisabled();
+  expect(await layoutProblems(page)).toEqual([]);
+
+  // Drop one: it's dropped (not a spare), and a spare can go in.
+  await page.getByRole("button", { name: "Drop Clip 1 from tonight" }).click();
+  await expect(page.getByText("Dropped · they wait for the next show")).toBeVisible();
+  await expect(page.getByText("9 of 10 · since the last show")).toBeVisible();
+  await expect(putBack.first()).toBeEnabled();
+  await putBack.first().click();
+  expect(shows.requests.at(-1)).toMatchObject({ body: { clipId: many(12)[10]?.id } });
+  await expect(page.getByText("10 of 10 · since the last show")).toBeVisible();
+  await expect(putBack.first()).toBeDisabled();
 });
 
 test("a lobby with every clip dropped can't start", async ({ page }) => {

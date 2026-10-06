@@ -20,7 +20,7 @@ interface State {
   durationMs: number | null;
 }
 
-/** The server's hub, in miniature: one state, host-only changes, pings. */
+/** The server's hub, in miniature: one state anyone in it changes, pings. */
 class Hub {
   state: State = {
     seq: 0,
@@ -57,7 +57,6 @@ class Hub {
     this.connects.set(userId, (this.connects.get(userId) ?? 0) + 1);
     ws.onMessage((raw) => {
       const msg = JSON.parse(String(raw));
-      const host = userId === this.hostId;
       if (msg.type !== "hello" && msg.type !== "ping") this.received.push({ userId, msg });
       switch (msg.type) {
         case "hello":
@@ -78,34 +77,31 @@ class Hub {
           ws.send(JSON.stringify({ type: "pong", clientMs: msg.clientMs, serverMs: this.now() }));
           break;
         case "load":
-          if (host)
-            this.change((s) => {
-              s.clipId = msg.clipId;
-              s.durationMs = 40_000;
-              s.positionMs = 0;
-              // Playing from `startAt`, at least the lead play needs ahead, as the server.
-              s.playing = msg.startAt != null;
-              s.atServerMs =
-                msg.startAt != null
-                  ? Math.max(msg.startAt, this.now() + 400) + this.startDelayMs
-                  : this.now();
-            });
+          this.change((s) => {
+            s.clipId = msg.clipId;
+            s.durationMs = 40_000;
+            s.positionMs = 0;
+            // Playing from `startAt`, at least the lead play needs ahead, as the server.
+            s.playing = msg.startAt != null;
+            s.atServerMs =
+              msg.startAt != null
+                ? Math.max(msg.startAt, this.now() + 400) + this.startDelayMs
+                : this.now();
+          });
           break;
         case "play":
-          if (host)
-            this.change((s) => {
-              s.positionMs = this.positionAt(this.now());
-              s.playing = true;
-              s.atServerMs = this.now() + 400;
-            });
+          this.change((s) => {
+            s.positionMs = this.positionAt(this.now());
+            s.playing = true;
+            s.atServerMs = this.now() + 400;
+          });
           break;
         case "pause":
-          if (host)
-            this.change((s) => {
-              s.positionMs = this.positionAt(this.now());
-              s.playing = false;
-              s.atServerMs = this.now();
-            });
+          this.change((s) => {
+            s.positionMs = this.positionAt(this.now());
+            s.playing = false;
+            s.atServerMs = this.now();
+          });
           break;
         case "react":
           this.broadcast({
@@ -116,20 +112,16 @@ class Hub {
             atMs: msg.atMs,
           });
           break;
-        case "replayRequest":
-          this.broadcast({ type: "replayRequest", userId });
-          break;
         case "takeOver":
           this.hostId = userId;
           this.hostAwaySince = null;
           this.broadcast({ type: "presence", presence: this.presence() });
           break;
         case "seek":
-          if (host)
-            this.change((s) => {
-              s.positionMs = msg.positionMs;
-              s.atServerMs = this.now();
-            });
+          this.change((s) => {
+            s.positionMs = msg.positionMs;
+            s.atServerMs = this.now();
+          });
           break;
       }
     });
@@ -246,9 +238,9 @@ test("two browsers play the host's clip in step, catch up, and survive a reconne
   const host = await join(await browser.newContext(), hub, me.id);
   const friend = await join(await browser.newContext(), hub, FRIEND);
 
-  // Only the host gets the controls.
-  await expect(host.getByTestId("host-controls")).toBeVisible();
-  await expect(friend.getByTestId("host-controls")).toHaveCount(0);
+  // Everyone gets the controls, not only the host.
+  await expect(host.getByTestId("controls")).toBeVisible();
+  await expect(friend.getByTestId("controls")).toBeVisible();
 
   await playFirstClip(host, friend);
 
@@ -447,7 +439,8 @@ test("who's here, show changes and refusals the connection survives", async ({ p
   });
   await open(page, `/shows/${SHOW_ID}`);
   await expect(page.getByTestId("show")).toHaveAttribute("data-connection", "open");
-  await expect(page.getByTestId("host-controls")).toBeVisible();
+  await expect(page.getByTestId("controls")).toBeVisible();
+  await expect(page.getByRole("button", { name: "End the show" })).toBeVisible();
 
   // The show's details changed (a clip added, say): it loads them again.
   await expect.poll(() => loads).toBeGreaterThan(0);
@@ -455,12 +448,14 @@ test("who's here, show changes and refusals the connection survives", async ({ p
   hub.say({ type: "showChanged" });
   await expect.poll(() => loads).toBe(before + 1);
 
-  // Someone else is the host now: the controls go.
+  // Someone else is the host now: the controls stay (they're everyone's), End the show
+  // goes.
   hub.say({
     type: "presence",
     presence: { hostId: FRIEND, online: [me.id, FRIEND], hostAwaySince: null },
   });
-  await expect(page.getByTestId("host-controls")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "End the show" })).toHaveCount(0);
+  await expect(page.getByTestId("controls")).toBeVisible();
 
   // A refusal is said; "slow down" isn't worth saying.
   hub.say({ type: "error", message: "slow down" });
@@ -558,7 +553,7 @@ test("joining: who's here, I'm ready, and the host's Start turns it into the sho
   expect(stored.posts.map((p) => p.path)).toEqual([`/api/shows/${SHOW_ID}/start`]);
   hub.say({ type: "showChanged" });
   await expect(host.getByRole("button", { name: `Start with ${showClip.title}` })).toBeVisible();
-  await expect(friend.getByText("Waiting for Robin to put a clip on.")).toBeVisible();
+  await expect(friend.getByRole("button", { name: `Start with ${showClip.title}` })).toBeVisible();
 });
 
 test("reactions float for everyone; 🍌 marks a fail; Kip asks when the uploader dies", async ({
@@ -616,31 +611,49 @@ test("reactions float for everyone; 🍌 marks a fail; Kip asks when the uploade
   ).toHaveAttribute("aria-pressed", "true");
 });
 
-test("a friend asks for it again; the host replays or dismisses", async ({ browser }) => {
+test("a friend steers for everyone; the volume is each one's own", async ({ browser }) => {
   test.setTimeout(60_000);
   const hub = new Hub();
   const host = await join(await browser.newContext(), hub, me.id);
   const friend = await join(await browser.newContext(), hub, FRIEND);
   await playFirstClip(host, friend);
 
-  const ask = friend.getByRole("button", { name: "Ask for it again" });
-  await ask.click();
-  await expect(friend.getByText("Asked Robin to play it again.")).toBeVisible();
-  // Once per clip.
-  await expect(ask).toBeDisabled();
-  const card = host.getByRole("status").filter({ hasText: "Jamie Doe wants it again" });
-  await expect(card).toBeVisible();
-  await card.getByRole("button", { name: "Replay" }).click();
-  await expect(card).toHaveCount(0);
-  expect(hub.received.filter((r) => r.userId === me.id).at(-1)?.msg).toEqual({
+  // The friend pauses, jumps back and plays: it's the room's state, so the host's too.
+  await friend.getByRole("button", { name: "Pause for everyone" }).click();
+  await expect.poll(() => hub.state.playing).toBe(false);
+  await expect(host.getByTestId("sync-status")).toHaveText("Paused");
+  await friend.getByRole("button", { name: "Back 10 s" }).click();
+  expect(hub.received.filter((r) => r.userId === FRIEND).at(-1)?.msg).toMatchObject({
     type: "seek",
-    positionMs: 0,
   });
+  await friend.getByRole("button", { name: "Play for everyone" }).click();
+  await expect.poll(() => hub.state.playing).toBe(true);
+  await startPlaying(host);
 
-  hub.say({ type: "replayRequest", userId: FRIEND });
-  await expect(card).toBeVisible();
-  await card.getByRole("button", { name: "Dismiss" }).click();
-  await expect(card).toHaveCount(0);
+  // The volume slides out on hover and back on leaving; turning it down or muting is
+  // only the friend's, and nothing goes to the room.
+  const sent = hub.received.length;
+  const slider = friend.getByRole("slider", { name: "Volume" });
+  const box = friend.getByTestId("volume");
+  const width = () => box.evaluate((el) => el.getBoundingClientRect().width);
+  await expect.poll(width).toBe(52);
+  await box.hover();
+  await expect.poll(width).toBeGreaterThan(150);
+  await slider.fill("30");
+  const level = (page: Page) =>
+    page.getByTestId("show-video").evaluate((v: HTMLVideoElement) => [v.volume, v.muted]);
+  expect(await level(friend)).toEqual([0.3, false]);
+  await friend.getByRole("button", { name: "Mute" }).click();
+  expect(await level(friend)).toEqual([0.3, true]);
+  expect(await level(host)).toEqual([1, false]);
+  await friend.mouse.move(0, 0);
+  await expect.poll(width).toBe(52);
+  await expect(friend.getByRole("button", { name: "Unmute" })).toBeVisible();
+  expect(hub.received.length).toBe(sent);
+  // Kept for the next show, in this browser.
+  await friend.reload();
+  await expect(friend.getByTestId("show")).toHaveAttribute("data-connection", "open");
+  expect(await level(friend)).toEqual([0.3, true]);
 });
 
 test("the side panel: up next, play one now, hide it, add a clip", async ({ page }, testInfo) => {
@@ -675,7 +688,13 @@ test("the side panel: up next, play one now, hide it, add a clip", async ({ page
   // Add a clip from the archive: the ready ones not in the show.
   await panel.getByRole("button", { name: "Add a clip" }).click();
   const dialog = page.getByRole("dialog", { name: "Add a clip to the show" });
-  await expect(dialog.getByRole("button", { name: `Add ${clips.normal.title}` })).toBeVisible();
+  // Before searching: the crowd's favourites (reactions), then the newest uploads.
+  const favourites = dialog.getByRole("region", { name: "Crowd favourites" });
+  await expect(favourites.getByText(clips.long.title)).toBeVisible();
+  await expect(favourites).toContainText("7 reactions");
+  const recent = dialog.getByRole("region", { name: "Recent uploads" });
+  await expect(recent.getByRole("button", { name: `Add ${clips.normal.title}` })).toBeVisible();
+  await expect(recent.getByText(clips.long.title)).toHaveCount(0);
   await expect(dialog.getByText(clips.processing.title)).toHaveCount(0);
   await dialog.getByRole("button", { name: `Add ${clips.normal.title}` }).click();
   await expect(dialog).toBeHidden();
@@ -733,11 +752,11 @@ test("between clips: the next one counts down for everyone; Hold and Start now",
   });
   expect(await layoutProblems(host)).toEqual([]);
 
-  // Hold: the count stops for everyone.
-  await host.getByRole("button", { name: "Hold" }).click();
-  await expect(friend.getByTestId("between")).toContainText("Held");
-  await expect(friend.getByText("Held. It starts when Robin starts it.")).toBeVisible();
-  await expect(host.getByRole("button", { name: "Hold" })).toHaveCount(0);
+  // Hold, from the friend: the count stops for everyone.
+  await friend.getByRole("button", { name: "Hold" }).click();
+  await expect(host.getByTestId("between")).toContainText("Held");
+  await expect(host.getByText("Held. It starts when someone presses Start now.")).toBeVisible();
+  await expect(friend.getByRole("button", { name: "Hold" })).toHaveCount(0);
 
   // Start now: it plays, and Up next goes.
   await host.getByRole("button", { name: "Start now" }).click();
@@ -877,6 +896,9 @@ test("the finale: fail of the night, then clip of the night, then the winners", 
       { category: "clip", clipId: showClip2.id, votes: 2 },
     ],
   };
+  // The second clip is the host's own (the stand-in tells both screens so).
+  const second = stored.show.lineup[1];
+  if (second) second.clip = { ...second.clip, isMine: true };
   const host = await join(await browser.newContext(), hub, me.id, stored.routes);
   const friend = await join(await browser.newContext(), hub, FRIEND, stored.routes);
 
@@ -907,6 +929,14 @@ test("the finale: fail of the night, then clip of the night, then the winners", 
   const clipVote = host.getByRole("region", { name: "Clip of the night" });
   await expect(clipVote.getByRole("heading", { name: "Clip of the night?" })).toBeVisible();
   await expect(clipVote.getByRole("button", { name: /show clip/i })).toHaveCount(2);
+  // Your own clip too: friends clip each other.
+  const own = clipVote.getByRole("button", { name: /Second show clip/ });
+  await expect(own).toContainText("Your clip · click to vote");
+  await own.click();
+  expect(stored.posts.at(-1)).toEqual({
+    path: `/api/shows/${SHOW_ID}/votes/clip`,
+    body: { clipId: showClip2.id },
+  });
 
   // The vote closes: the host's screen ends the show, and everyone gets the winners.
   retime(stored, hub, null);

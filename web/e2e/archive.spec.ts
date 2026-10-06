@@ -24,6 +24,7 @@ const replay: ShowView = {
     clip,
     position,
     dropped: false,
+    spare: false,
     playedAt: pastShow.endedAt,
     addedBy: me.id,
   })),
@@ -79,6 +80,25 @@ test("the archive starts with past shows: winners, who watched, the replay", asy
   });
   expect(await layoutProblems(page)).toEqual([]);
   expect(await cspViolations(page)).toEqual([]);
+});
+
+test("a show that played a lot shows five more of them and counts the rest", async ({ page }) => {
+  const more = Array.from({ length: 6 }, (_, i) => ({
+    ...clips.normal,
+    id: `10000000-0000-4000-8000-0000000001${String(i).padStart(2, "0")}`,
+    title: `Also ${i + 1}`,
+    failOfTheNight: false,
+  }));
+  const big = { ...pastShow, clips: [...pastShow.clips, ...more] };
+  await open(page, "/", false, undefined, (p) =>
+    p.route("**/api/shows", (route) => json(route, [big])),
+  );
+  const card = page.getByRole("region", { name: "Past shows" }).getByRole("article");
+  await expect(card).toContainText("8 clips");
+  await expect(card.getByRole("link", { name: /^Also \d$/ })).toHaveCount(5);
+  await expect(card.getByRole("link", { name: "Also 6" })).toHaveCount(0);
+  await expect(card).toContainText("and 1 more clip");
+  expect(await layoutProblems(page)).toEqual([]);
 });
 
 test("Clips of the night and Fails filter the archive", async ({ page }) => {

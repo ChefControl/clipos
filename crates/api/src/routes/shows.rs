@@ -1,7 +1,7 @@
 //! Shows (docs/PLAN.md, redesign, S4): tonight's lineup, opening a show, joining it, the
 //! host's controls, show reactions and the finale vote, and past shows for the archive.
 //! Admins only until the show opens to everyone (`SHOWS_FOR`, decision 40). The live sync
-//! (everyone's player following the host) arrives with the show hub in S5.
+//! (everyone's player in step) is the show hub, `crate::live`.
 
 use std::collections::HashMap;
 
@@ -69,8 +69,10 @@ fn allowed(state: &AppState, user: &User) -> Result<(), ApiError> {
 pub struct LineupEntry {
     pub clip: ClipView,
     pub position: i32,
-    /// Left out by the host; stays for the next show.
+    /// Left out by the host, or a spare; stays for the next show.
     pub dropped: bool,
+    /// Left out because the show was full (10 clips), not by the host (decision 57).
+    pub spare: bool,
     pub played_at: Option<DateTime<Utc>>,
     /// Who put it in the lineup (the host for tonight's clips).
     pub added_by: Option<Uuid>,
@@ -216,6 +218,7 @@ async fn show_view(state: &AppState, show: Show, viewer: &User) -> Result<ShowVi
                 clip: clip_views.remove(&l.clip_id)?,
                 position: l.position,
                 dropped: l.dropped,
+                spare: l.spare,
                 played_at: l.played_at,
                 added_by: l.added_by,
             })
@@ -539,8 +542,8 @@ pub async fn list_shows(
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetLineup {
-    /// The clips still to play, in order. Ones left out are dropped (they stay for the
-    /// next show).
+    /// The clips still to play, in order, at most 10 with the played ones. Ones left out
+    /// are dropped (they stay for the next show).
     pub clip_ids: Vec<Uuid>,
 }
 
@@ -554,7 +557,7 @@ pub struct SetLineup {
     request_body = SetLineup,
     responses(
         (status = 200, description = "The show", body = ShowView),
-        (status = 400, description = "A clip that isn't waiting in the lineup, or one twice", body = ErrorBody),
+        (status = 400, description = "A clip that isn't waiting in the lineup, one twice, or more than 10 clips", body = ErrorBody),
         (status = 403, description = "Not the host", body = ErrorBody),
         (status = 404, description = "No such show, or shows aren't open to you yet", body = ErrorBody),
         (status = 409, description = "Not in the lobby or live", body = ErrorBody),
@@ -578,7 +581,7 @@ pub struct AddClip {
     pub clip_id: Uuid,
 }
 
-/// Anyone in the show adds a clip to the end of the queue.
+/// Anyone in the show adds a clip to the end of the queue, up to 10 clips.
 #[utoipa::path(
     post,
     path = "/shows/{id}/clips",
@@ -591,7 +594,7 @@ pub struct AddClip {
         (status = 400, description = "Your clip isn't ready to play", body = ErrorBody),
         (status = 403, description = "Not in the show", body = ErrorBody),
         (status = 404, description = "No such show or clip, or shows aren't open to you yet", body = ErrorBody),
-        (status = 409, description = "Already in the lineup, or not in the lobby or live", body = ErrorBody),
+        (status = 409, description = "Already in the lineup, the show has 10 clips, or not in the lobby or live", body = ErrorBody),
     )
 )]
 pub async fn add_clip(
@@ -689,7 +692,7 @@ pub async fn start_show(
     reload(&state, id, &user).await
 }
 
-/// The host: this clip started playing for everyone.
+/// Anyone in the show: this clip started playing for everyone.
 #[utoipa::path(
     post,
     path = "/shows/{id}/clips/{clip_id}/played",
@@ -702,7 +705,7 @@ pub async fn start_show(
     responses(
         (status = 200, description = "The show", body = ShowView),
         (status = 400, description = "Not in the lineup", body = ErrorBody),
-        (status = 403, description = "Not the host", body = ErrorBody),
+        (status = 403, description = "Not in the show", body = ErrorBody),
         (status = 404, description = "No such show, or shows aren't open to you yet", body = ErrorBody),
         (status = 409, description = "The show isn't live", body = ErrorBody),
     )
