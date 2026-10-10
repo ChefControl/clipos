@@ -5,7 +5,7 @@
 # instead (with warm caches) and passes them in as the `bin` and `spa` stages:
 #   --build-context bin=<dir with clipos-api> --build-context spa=web/dist
 
-FROM node:22-trixie-slim AS web
+FROM node:25-trixie-slim AS web
 WORKDIR /src/web
 RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml ./
