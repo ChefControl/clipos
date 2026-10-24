@@ -4,7 +4,7 @@
 # kept on disk, so a restart only signs people out (they're signed straight back in).
 # Deployment settings (URL, Auth0 client, admins) are app settings: infra/azure/grafana.tf.
 
-FROM grafana/grafana:13.2.3@sha256:b28bae15e219c998fb0e0424ed724930cc61b1f61fb404d47c862f9a23f9e572
+FROM grafana/grafana:13.2.4@sha256:dbbc38ea21103cefb50396340cd88afec779c7e070b0a7bf5a75b4ce46651d3f
 COPY deploy/grafana/grafana.ini /etc/grafana/grafana.ini
 COPY deploy/grafana/provisioning /etc/grafana/provisioning
 COPY deploy/grafana/dashboards /etc/grafana/dashboards
