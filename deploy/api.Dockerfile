@@ -17,7 +17,7 @@ RUN pnpm build
 FROM scratch AS spa
 COPY --from=web /src/web/dist /
 
-FROM rust:1.98-trixie AS build
+FROM rust:1.99-trixie AS build
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

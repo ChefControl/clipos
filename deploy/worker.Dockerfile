@@ -9,7 +9,7 @@
 # models=<dir with hud-locator/v1/...>). Without them, as in the audit build, the image
 # carries none and the worker downloads them on its first analysis.
 
-FROM rust:1.98-trixie AS build
+FROM rust:1.99-trixie AS build
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
